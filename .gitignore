@@ -1,0 +1,34 @@
+# Environment variables (contains sensitive credentials)
+.env
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+error_log
+
+# Temporary files
+tmp/
+temp/
+cache/
+
+# Backup files
+*.bak
+*.backup
+backup_*.sql
+
+# Security-sensitive files
+create_admin.php
+
+# Uploads (if any)
+uploads/*
+!uploads/.gitkeep
