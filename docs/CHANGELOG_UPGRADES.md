@@ -93,16 +93,34 @@ This document consolidates **all major changes, upgrades, and security fixes** m
 - **Cluster:** Aggregates per cluster, includes dominant gender subquery.
 - **Unassigned:** Shows customers not assigned to any cluster.
 
+### ✅ Unassigned Segmentation Feature
+
+- **Query:** Identifies customers not in `segmentation_results` table.
+- **Insights Display:**
+  - Shows total count of unassigned customers.
+  - Displays age, income, and purchase amount ranges.
+  - Provides recommendations to run clustering script.
+  - Handles empty results gracefully with user-friendly messages.
+- **Custom Visualizations:**
+  - **Main Chart:** Gender distribution bar chart for unassigned customers.
+  - **Pie Chart:** Region distribution breakdown.
+  - Special handling since unassigned returns individual records, not aggregated data.
+- **Data Structure:** Modified JavaScript to handle non-aggregated customer data differently from other segmentation types.
+
+
 ### ✅ Error Handling
 
 - All DB queries in try/catch.
 - User sees minimal error; details logged.
+- Empty results display informative messages instead of errors.
+- Conditional checks prevent array access errors on empty datasets.
 
 ### ✅ Enhanced Visualizations
 
 - Chart.js for bar, line, and pie charts.
 - Cluster metadata and details fetched for advanced visualizations.
 - Insights section summarizes key findings per segmentation.
+- Conditional chart rendering based on segmentation type and data structure.
 
 ### ✅ Logout
 
@@ -171,6 +189,9 @@ This document consolidates **all major changes, upgrades, and security fixes** m
 - All segmentation types render tables and charts.
 - Cluster visualizations work if metadata present.
 - Unassigned customers view lists correct customers.
+- Unassigned segmentation displays custom gender and region charts.
+- Empty unassigned results show appropriate messaging.
+- Dropdown maintains selected value after form submission.
 - DB errors are logged, not shown to users.
 
 ### ✅ Rollback
@@ -206,6 +227,7 @@ This document consolidates **all major changes, upgrades, and security fixes** m
 
 ## References
 
+- [SECURITY_ANALYSIS.md](docs/SECURITY_ANALYSIS.md) - **NEW: Comprehensive security audit and vulnerability assessment**
 - [DB_SECURITY_FIXES.md](docs/DB_SECURITY_FIXES.md)
 - [SECURITY_UPGRADE.md](docs/SECURITY_UPGRADE.md)
 - [SETUP_GUIDE.md](docs/SETUP_GUIDE.md)
@@ -216,3 +238,4 @@ This document consolidates **all major changes, upgrades, and security fixes** m
 **Date:** January 2026  
 **Maintainer:** [Your Team Name]  
 **Status:** All critical upgrades and fixes applied.  
+**Latest Security Audit:** January 11, 2026 - See SECURITY_ANALYSIS.md for detailed findings  

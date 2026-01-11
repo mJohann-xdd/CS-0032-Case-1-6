@@ -173,13 +173,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="col-md-6">
                     <div class="input-group">
                         <select name="segmentation_type" class="form-select" required>
-                            <option value="" disabled selected>Select Segmentation Type</option>
-                            <option value="gender">By Gender</option>
-                            <option value="region">By Region</option>
-                            <option value="age_group">By Age Group</option>
-                            <option value="income_bracket">By Income Bracket</option>
-                            <option value="cluster">By Cluster</option>
-                            <option value="purchase_tier">By Purchase Tier</option>
+                            <option value="" disabled <?= !isset($segmentationType) ? 'selected' : '' ?>>Select Segmentation Type</option>
+                            <option value="gender" <?= isset($segmentationType) && $segmentationType === 'gender' ? 'selected' : '' ?>>By Gender</option>
+                            <option value="region" <?= isset($segmentationType) && $segmentationType === 'region' ? 'selected' : '' ?>>By Region</option>
+                            <option value="age_group" <?= isset($segmentationType) && $segmentationType === 'age_group' ? 'selected' : '' ?>>By Age Group</option>
+                            <option value="income_bracket" <?= isset($segmentationType) && $segmentationType === 'income_bracket' ? 'selected' : '' ?>>By Income Bracket</option>
+                            <option value="cluster" <?= isset($segmentationType) && $segmentationType === 'cluster' ? 'selected' : '' ?>>By Cluster</option>
+                            <option value="purchase_tier" <?= isset($segmentationType) && $segmentationType === 'purchase_tier' ? 'selected' : '' ?>>By Purchase Tier</option>
+                            <option value="unassigned" <?= isset($segmentationType) && $segmentationType === 'unassigned' ? 'selected' : '' ?>>By Unassigned</option>
                         </select>
                         <button type="submit" class="btn btn-primary">Show Results</button>
                     </div>
@@ -188,7 +189,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </form>
 
         <!-- Results Table -->
-        <?php if (isset($results)): ?>
+        <?php if (isset($results) && !empty($results)): ?>
             <table class="table table-striped table-bordered">
                 <thead class="table-dark">
                     <tr>
@@ -226,13 +227,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             <script>
                 const segmentationType = '<?= $segmentationType ?>';
-                const labels = <?= json_encode(array_column($results, array_keys($results[0])[0])) ?>;
-                const data = <?= json_encode(array_column($results, array_keys($results[0])[1])) ?>;
                 const results = <?= json_encode($results) ?>;
+                
+                // For unassigned, we don't have aggregated data, so handle differently
+                let labels, data, totalCustomers;
+                
+                if (segmentationType === 'unassigned') {
+                    labels = [];
+                    data = [];
+                    totalCustomers = results.length;
+                } else {
+                    labels = <?= json_encode(array_column($results, array_keys($results[0])[0])) ?>;
+                    data = <?= json_encode(array_column($results, array_keys($results[0])[1])) ?>;
+                    totalCustomers = data.reduce((a, b) => a + b, 0);
+                }
 
                 // Generate insights based on segmentation type
                 let insights = '';
-                const totalCustomers = data.reduce((a, b) => a + b, 0);
 
                 switch(segmentationType) {
                     case 'gender':
@@ -304,6 +315,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <li>Understanding spending tiers enables personalized product recommendations</li>
                         </ul>`;
                         break;
+
+                    case 'unassigned':
+                        const unassignedCount = results.length;
+                        if (unassignedCount > 0) {
+                            const ages = results.filter(r => r.age).map(r => parseInt(r.age));
+                            const incomes = results.filter(r => r.income).map(r => parseFloat(r.income));
+                            const purchases = results.filter(r => r.purchase_amount).map(r => parseFloat(r.purchase_amount));
+                            
+                            insights = `<ul>
+                                <li>Found <strong>${unassignedCount.toLocaleString()} customers</strong> not assigned to any cluster</li>
+                                <li>These customers represent potential segments that need analysis</li>
+                                ${ages.length > 0 ? `<li>Age range: ${Math.min(...ages)} to ${Math.max(...ages)} years</li>` : ''}
+                                ${incomes.length > 0 ? `<li>Income range: $${Math.min(...incomes).toLocaleString()} to $${Math.max(...incomes).toLocaleString()}</li>` : ''}
+                                ${purchases.length > 0 ? `<li>Purchase range: $${Math.min(...purchases).toLocaleString()} to $${Math.max(...purchases).toLocaleString()}</li>` : ''}
+                                <li><strong>Recommendation:</strong> Run the clustering script to include these customers in your segmentation analysis</li>
+                            </ul>`;
+                        } else {
+                            insights = `<ul>
+                                <li><strong>All customers have been assigned to clusters</strong></li>
+                                <li>Your segmentation coverage is complete</li>
+                                <li>Consider re-running clustering if you add new customers</li>
+                            </ul>`;
+                        }
+                        break;
                 }
 
                 document.getElementById('insights').innerHTML = insights;
@@ -312,37 +347,78 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 const ctx1 = document.getElementById('mainChart').getContext('2d');
                 const chartType = (segmentationType === 'age_group' || segmentationType === 'income_bracket') ? 'line' : 'bar';
 
-                new Chart(ctx1, {
-                    type: chartType,
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: '<?= ucfirst(str_replace('_', ' ', array_keys($results[0])[1])) ?>',
-                            data: data,
-                            backgroundColor: chartType === 'bar' ? 'rgba(54, 162, 235, 0.6)' : 'rgba(54, 162, 235, 0.2)',
-                            borderColor: 'rgba(54, 162, 235, 1)',
-                            borderWidth: 2,
-                            fill: chartType === 'line'
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        plugins: {
-                            title: {
-                                display: true,
-                                text: 'Customer Distribution by <?= ucfirst(str_replace('_', ' ', $segmentationType)) ?>'
-                            },
-                            legend: {
-                                display: true
-                            }
+                if (segmentationType === 'unassigned') {
+                    // For unassigned, show demographic breakdown instead
+                    const genderCounts = {};
+                    const regionCounts = {};
+                    results.forEach(r => {
+                        genderCounts[r.gender] = (genderCounts[r.gender] || 0) + 1;
+                        regionCounts[r.region] = (regionCounts[r.region] || 0) + 1;
+                    });
+
+                    new Chart(ctx1, {
+                        type: 'bar',
+                        data: {
+                            labels: Object.keys(genderCounts),
+                            datasets: [{
+                                label: 'Count by Gender',
+                                data: Object.values(genderCounts),
+                                backgroundColor: 'rgba(54, 162, 235, 0.6)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 2
+                            }]
                         },
-                        scales: {
-                            y: {
-                                beginAtZero: true
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                title: {
+                                    display: true,
+                                    text: 'Unassigned Customers - Gender Distribution'
+                                },
+                                legend: {
+                                    display: true
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true
+                                }
                             }
                         }
-                    }
-                });
+                    });
+                } else {
+                    new Chart(ctx1, {
+                        type: chartType,
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: '<?= ucfirst(str_replace('_', ' ', array_keys($results[0])[1])) ?>',
+                                data: data,
+                                backgroundColor: chartType === 'bar' ? 'rgba(54, 162, 235, 0.6)' : 'rgba(54, 162, 235, 0.2)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 2,
+                                fill: chartType === 'line'
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                title: {
+                                    display: true,
+                                    text: 'Customer Distribution by <?= ucfirst(str_replace('_', ' ', $segmentationType)) ?>'
+                                },
+                                legend: {
+                                    display: true
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true
+                                }
+                            }
+                        }
+                    });
+                }
 
                 // Pie Chart for Distribution
                 const ctx2 = document.getElementById('pieChart').getContext('2d');
@@ -355,36 +431,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'rgba(255, 159, 64, 0.8)'
                 ];
 
-                new Chart(ctx2, {
-                    type: 'pie',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            data: data,
-                            backgroundColor: colors.slice(0, labels.length),
-                            borderWidth: 2,
-                            borderColor: '#fff'
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        plugins: {
-                            title: {
-                                display: true,
-                                text: 'Distribution %'
-                            },
-                            legend: {
-                                position: 'bottom',
-                                labels: {
-                                    boxWidth: 15,
-                                    font: {
-                                        size: 10
+                if (segmentationType === 'unassigned') {
+                    // For unassigned, show region breakdown
+                    const regionCounts = {};
+                    results.forEach(r => {
+                        regionCounts[r.region] = (regionCounts[r.region] || 0) + 1;
+                    });
+
+                    new Chart(ctx2, {
+                        type: 'pie',
+                        data: {
+                            labels: Object.keys(regionCounts),
+                            datasets: [{
+                                data: Object.values(regionCounts),
+                                backgroundColor: colors.slice(0, Object.keys(regionCounts).length),
+                                borderWidth: 2,
+                                borderColor: '#fff'
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                title: {
+                                    display: true,
+                                    text: 'Region Distribution %'
+                                },
+                                legend: {
+                                    position: 'bottom',
+                                    labels: {
+                                        boxWidth: 15,
+                                        font: {
+                                            size: 10
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                });
+                    });
+                } else {
+                    new Chart(ctx2, {
+                        type: 'pie',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                data: data,
+                                backgroundColor: colors.slice(0, labels.length),
+                                borderWidth: 2,
+                                borderColor: '#fff'
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                title: {
+                                    display: true,
+                                    text: 'Distribution %'
+                                },
+                                legend: {
+                                    position: 'bottom',
+                                    labels: {
+                                        boxWidth: 15,
+                                        font: {
+                                            size: 10
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
             </script>
 
             <!-- Enhanced Cluster Visualizations -->
@@ -711,6 +826,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     });
                 </script>
             <?php endif; ?>
+        <?php else: ?>
+            <div class="alert alert-warning">
+                <strong>No results found.</strong> 
+                <?php if (isset($segmentationType) && $segmentationType === 'unassigned'): ?>
+                    All customers have been assigned to clusters.
+                <?php else: ?>
+                    No data available for this segmentation type.
+                <?php endif; ?>
+            </div>
         <?php endif; ?>
     </div>
 
