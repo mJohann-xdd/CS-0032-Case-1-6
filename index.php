@@ -243,8 +243,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 // Main Bar/Line Chart
                 const ctx1 = document.getElementById('mainChart').getContext('2d');
-                const chartType = (segmentationType === 'age_group' || segmentationType === 'income_bracket') ? 'line' : 'bar';
 
+                // changes are here for dynamic chart type
+                let chartType = 'bar';
+                let indexAxis = 'x';
+
+                if(segmentationType === 'age_group' || segmentationType === 'income_bracket'){
+                    chartType = 'line';
+                }else if(segmentationType === 'region'){
+                    chartType = 'bar';
+                    indexAxis = 'y';
+                }
+                //const chartType = (segmentationType === 'age_group' || segmentationType === 'income_bracket') ? 'line' : 'bar';
+
+                if (segmentation_type === 'purchase_tier'){
+                    new Chart(ctx1, {
+                        type: 'radar',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'Purchase Tier Segmentation',
+                                data: data,
+                                backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                pointBackgroundColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 2,
+                            }]
+                        },
+                        options:{
+                            responsive: true,
+                            scales: {
+                                r: {
+                                    beginAtZero: true
+                                }
+                            }
+                        }
+                    });
+                    return;
+                }
                 new Chart(ctx1, {
                     type: chartType,
                     data: {
@@ -289,7 +325,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ];
 
                 new Chart(ctx2, {
-                    type: 'pie',
+                    type: 'doughnut',
                     data: {
                         labels: labels,
                         datasets: [{
@@ -301,11 +337,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     },
                     options: {
                         responsive: true,
+                        cutout: '60%',
                         plugins: {
-                            title: {
-                                display: true,
-                                text: 'Distribution %'
-                            },
                             legend: {
                                 position: 'bottom',
                                 labels: {
