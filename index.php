@@ -158,88 +158,154 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
 
             <script>
-                const segmentationType = '<?= $segmentationType ?>';
-                const labels = <?= json_encode(array_column($results, array_keys($results[0])[0])) ?>;
-                const data = <?= json_encode(array_column($results, array_keys($results[0])[1])) ?>;
-                const results = <?= json_encode($results) ?>;
+            console.log('Script loaded - version 2.0');
+    const segmentationType = '<?= $segmentationType ?>';
+    const labels = <?= json_encode(array_column($results, array_keys($results[0])[0])) ?>;
+    const data = <?= json_encode(array_column($results, array_keys($results[0])[1])) ?>;
+    const results = <?= json_encode($results) ?>;
 
-                // Generate insights based on segmentation type
-                let insights = '';
-                const totalCustomers = data.reduce((a, b) => a + b, 0);
+    // Generate insights based on segmentation type
+    let insights = '';
+    const totalCustomers = data.reduce((a, b) => parseInt(a) + parseInt(b), 0);
 
-                switch(segmentationType) {
-                    case 'gender':
-                        insights = `<ul>
-                            <li>Total customers analyzed: ${totalCustomers.toLocaleString()}</li>
-                            <li>Gender distribution shows ${labels.length} categories</li>
-                            <li>Largest segment: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
-                            ${results.length > 0 && results[0].avg_income ? `<li>Average income across genders ranges from $${Math.min(...results.map(r => parseFloat(r.avg_income))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
-                        </ul>`;
-                        break;
+    switch(segmentationType) {
+        case 'gender':
+    // Calculate income gap between genders
+            const incomes = results.map(r => parseFloat(r.avg_income)).filter(i => !isNaN(i));
+            const incomeGap = incomes.length > 1 ? Math.abs(Math.max(...incomes) - Math.min(...incomes)) : 0;
+    
+            insights = `<ul>
+                <li>Total customers analyzed: ${totalCustomers.toLocaleString()}</li>
+                <li>Gender distribution shows ${labels.length} categories</li>
+                <li>Largest segment: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
+                ${results.length > 0 && results[0].avg_income ? `<li>Average income across genders ranges from $${Math.min(...results.map(r => parseFloat(r.avg_income))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
+                ${incomeGap > 0 ? `<li><strong>Income gap between genders: $${incomeGap.toLocaleString()}</strong></li>` : ''}
+            </ul>`;
+            break;
 
-                    case 'region':
-                        insights = `<ul>
-                            <li>Total customers across ${labels.length} regions: ${totalCustomers.toLocaleString()}</li>
-                            <li>Top region: ${labels[0]} with ${data[0].toLocaleString()} customers</li>
-                            <li>Regional concentration: Top 3 regions represent ${((data[0] + (data[1]||0) + (data[2]||0))/totalCustomers*100).toFixed(1)}% of total customers</li>
-                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Purchase amounts vary from $${Math.min(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()} across regions</li>` : ''}
-                        </ul>`;
-                        break;
+        case 'region':
+            insights = `<ul>
+                <li>Total customers across ${labels.length} regions: ${totalCustomers.toLocaleString()}</li>
+                <li>Top region: ${labels[0]} with ${data[0].toLocaleString()} customers</li>
+                <li>Regional concentration: Top 3 regions represent ${((parseInt(data[0]) + parseInt(data[1]||0) + parseInt(data[2]||0))/totalCustomers*100).toFixed(1)}% of total customers</li>
+                ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Purchase amounts vary from $${Math.min(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()} across regions</li>` : ''}
+            </ul>`;
+            break;
 
-                    case 'age_group':
-                        insights = `<ul>
-                            <li>Customer base distributed across ${labels.length} age groups</li>
-                            <li>Dominant age group: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
-                            ${results.length > 0 && results[0].avg_income ? `<li>Income peaks in the ${results.reduce((max, r) => parseFloat(r.avg_income) > parseFloat(max.avg_income) ? r : max).age_group || results[0].age_group} age group at $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
-                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Highest spending age group: ${results.reduce((max, r) => parseFloat(r.avg_purchase_amount) > parseFloat(max.avg_purchase_amount) ? r : max).age_group || results[0].age_group}</li>` : ''}
-                        </ul>`;
-                        break;
+        case 'age_group':
+            // Fix: Check if the property exists first
+            const ageGroupKey = results[0].age_group ? 'age_group' : Object.keys(results[0])[0];
+            const topAgeGroup = labels[data.indexOf(Math.max(...data))];
+            
+            // Find highest income age group
+            let highestIncomeGroup = '';
+            if (results[0].avg_income) {
+                highestIncomeGroup = results.reduce((max, r) => 
+                    parseFloat(r.avg_income || 0) > parseFloat(max.avg_income || 0) ? r : max
+                )[ageGroupKey];
+            }
+            
+            // Find highest spending age group
+            let highestSpendingGroup = '';
+            if (results[0].avg_purchase_amount) {
+                highestSpendingGroup = results.reduce((max, r) => 
+                    parseFloat(r.avg_purchase_amount || 0) > parseFloat(max.avg_purchase_amount || 0) ? r : max
+                )[ageGroupKey];
+            }
+            
+            insights = `<ul>
+                <li>Customer base distributed across ${labels.length} age groups</li>
+                <li>Dominant age group: ${topAgeGroup} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
+                ${highestIncomeGroup ? `<li>Income peaks in the ${highestIncomeGroup} age group at $${Math.max(...results.map(r => parseFloat(r.avg_income || 0))).toLocaleString()}</li>` : ''}
+                ${highestSpendingGroup ? `<li>Highest spending age group: ${highestSpendingGroup}</li>` : ''}
+            </ul>`;
+            break;
 
-                    case 'income_bracket':
-                        insights = `<ul>
-                            <li>Customers segmented into ${labels.length} income brackets</li>
-                            <li>Largest income segment: ${labels[data.indexOf(Math.max(...data))]} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
-                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Purchase behavior: ${results.reduce((max, r) => parseFloat(r.avg_purchase_amount) > parseFloat(max.avg_purchase_amount) ? r : max).income_bracket || results[0].income_bracket} shows highest average spending at $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()}</li>` : ''}
-                            <li>Income-purchase correlation can guide targeted marketing strategies</li>
-                        </ul>`;
-                        break;
+        case 'income_bracket':
+            // Fix: Check if the property exists
+            const incomeKey = results[0].income_bracket ? 'income_bracket' : Object.keys(results[0])[0];
+            
+            let highestSpendingBracket = '';
+            if (results[0].avg_purchase_amount) {
+                highestSpendingBracket = results.reduce((max, r) => 
+                    parseFloat(r.avg_purchase_amount || 0) > parseFloat(max.avg_purchase_amount || 0) ? r : max
+                )[incomeKey];
+            }
+            
+            insights = `<ul>
+                <li>Customers segmented into ${labels.length} income brackets</li>
+                <li>Largest income segment: ${labels[data.indexOf(Math.max(...data))]} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
+                ${highestSpendingBracket ? `<li>Purchase behavior: ${highestSpendingBracket} shows highest average spending at $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount || 0))).toLocaleString()}</li>` : ''}
+                <li>Income-purchase correlation can guide targeted marketing strategies</li>
+            </ul>`;
+            break;
 
-                    case 'cluster':
-                        // Check if we have enhanced metadata
-                        if (typeof clusterMetadata !== 'undefined' && clusterMetadata.length > 0) {
-                            const largestCluster = clusterMetadata.reduce((max, c) =>
-                                c.customer_count > max.customer_count ? c : max
-                            );
-                            insights = `<ul>
-                                <li>Advanced k-means clustering identified <strong>${clusterMetadata.length} distinct customer segments</strong></li>
-                                <li>Largest segment: <strong>${largestCluster.cluster_name}</strong> with ${parseInt(largestCluster.customer_count).toLocaleString()} customers (${((largestCluster.customer_count/totalCustomers)*100).toFixed(1)}%)</li>
-                                <li>Clusters range from "${clusterMetadata[0].cluster_name}" to "${clusterMetadata[clusterMetadata.length-1].cluster_name}"</li>
-                                <li>Each cluster has unique demographics, income levels, and purchasing behaviors - view detailed analysis below</li>
-                                <li><strong>Actionable insights:</strong> Scroll down to see cluster characteristics, statistics, visualizations, and marketing recommendations</li>
-                            </ul>`;
-                        } else {
-                            // Fallback to original insights if metadata not available
-                            insights = `<ul>
-                                <li>Machine learning clustering identified ${labels.length} distinct customer segments</li>
-                                <li>Largest cluster: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers</li>
-                                ${results.length > 0 && results[0].min_age && results[0].max_age ? `<li>Age ranges vary across clusters, providing demographic differentiation</li>` : ''}
-                                <li>Each cluster represents a unique customer profile for targeted campaigns</li>
-                                <li><em>Note: Run the Python clustering script to generate enhanced cluster analysis with detailed explanations</em></li>
-                            </ul>`;
-                        }
-                        break;
+        case 'cluster':
+        // Check if we have enhanced metadata
+            if (typeof clusterMetadata !== 'undefined' && clusterMetadata.length > 0) {
+                const largestCluster = clusterMetadata.reduce((max, c) =>
+                c.customer_count > max.customer_count ? c : max
+            );
+        
+        // NEW INSIGHT 1: Cluster Diversity Score
+            const avgClusterSize = totalCustomers / clusterMetadata.length;
+            const variance = clusterMetadata.reduce((sum, c) => 
+                sum + Math.pow(c.customer_count - avgClusterSize, 2), 0) / clusterMetadata.length;
+            const diversityScore = (Math.sqrt(variance) / avgClusterSize * 100).toFixed(1);
+        
+        // NEW INSIGHT 2: High-Value Cluster Identification
+            const avgPurchases = clusterMetadata.map(c => parseFloat(c.avg_purchase_amount));
+            const overallAvgPurchase = avgPurchases.reduce((a, b) => a + b, 0) / avgPurchases.length;
+            const highValueClusters = clusterMetadata.filter(c => 
+                parseFloat(c.avg_purchase_amount) > overallAvgPurchase * 1.2
+            );
+        
+        // NEW INSIGHT 3: Age-Income-Purchase Correlation
+            const clusterWithHighestROI = clusterMetadata.reduce((max, c) => {
+                const roi = parseFloat(c.avg_purchase_amount) / parseFloat(c.avg_income);
+                const maxRoi = parseFloat(max.avg_purchase_amount) / parseFloat(max.avg_income);
+                return roi > maxRoi ? c : max;
+            });
+        
+        insights = `<ul>
+            <li>Advanced k-means clustering identified <strong>${clusterMetadata.length} distinct customer segments</strong></li>
+            <li>Largest segment: <strong>${largestCluster.cluster_name}</strong> with ${parseInt(largestCluster.customer_count).toLocaleString()} customers (${((largestCluster.customer_count/totalCustomers)*100).toFixed(1)}%)</li>
+            <li>Clusters range from "${clusterMetadata[0].cluster_name}" to "${clusterMetadata[clusterMetadata.length-1].cluster_name}"</li>
+            <li><strong>NEW: Cluster diversity score: ${diversityScore}%</strong> - ${diversityScore > 50 ? 'High variation in cluster sizes suggests distinct market segments' : 'Relatively balanced cluster distribution'}</li>
+            <li><strong>NEW: High-value segments identified: ${highValueClusters.length} cluster(s)</strong> with above-average spending (>${overallAvgPurchase.toFixed(0)}$) - Focus: ${highValueClusters.map(c => c.cluster_name).join(', ') || 'None'}</li>
+            <li><strong>NEW: Best purchase-to-income ratio: ${clusterWithHighestROI.cluster_name}</strong> (${(parseFloat(clusterWithHighestROI.avg_purchase_amount) / parseFloat(clusterWithHighestROI.avg_income) * 100).toFixed(1)}% of income) - Prime target for upselling</li>
+            <li>Each cluster has unique demographics, income levels, and purchasing behaviors - view detailed analysis below</li>
+            <li><strong>Actionable insights:</strong> Scroll down to see cluster characteristics, statistics, visualizations, and marketing recommendations</li>
+        </ul>`;
+    } else {
+        // Fallback to original insights if metadata not available
+        insights = `<ul>
+            <li>Machine learning clustering identified ${labels.length} distinct customer segments</li>
+            <li>Largest cluster: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers</li>
+            ${results.length > 0 && results[0].min_age && results[0].max_age ? `<li>Age ranges vary across clusters, providing demographic differentiation</li>` : ''}
+            <li>Each cluster represents a unique customer profile for targeted campaigns</li>
+            <li><em>Note: Run the Python clustering script to generate enhanced cluster analysis with detailed explanations</em></li>
+        </ul>`;
+    }
+    break;
 
-                    case 'purchase_tier':
-                        insights = `<ul>
-                            <li>Customers categorized into ${labels.length} spending tiers</li>
-                            <li>Largest tier: ${labels[data.indexOf(Math.max(...data))]} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
-                            ${results.length > 0 && results[0].avg_income ? `<li>High spenders correlate with income levels averaging $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
-                            <li>Understanding spending tiers enables personalized product recommendations</li>
-                        </ul>`;
-                        break;
-                }
+        case 'purchase_tier':
+            // Fix: Check if property exists
+            const tierKey = results[0].purchase_tier ? 'purchase_tier' : Object.keys(results[0])[0];
+            
+            insights = `<ul>
+                <li>Customers categorized into ${labels.length} spending tiers</li>
+                <li>Largest tier: ${labels[data.indexOf(Math.max(...data))]} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
+                ${results.length > 0 && results[0].avg_income ? `<li>High spenders correlate with income levels averaging $${Math.max(...results.map(r => parseFloat(r.avg_income || 0))).toLocaleString()}</li>` : ''}
+                <li>Understanding spending tiers enables personalized product recommendations</li>
+            </ul>`;
+            break;
 
-                document.getElementById('insights').innerHTML = insights;
+        default:
+            insights = '<p>Select a segmentation type to view insights.</p>';
+    }
+
+    document.getElementById('insights').innerHTML = insights;
 
                 // Main Bar/Line Chart
                 const ctx1 = document.getElementById('mainChart').getContext('2d');
@@ -256,62 +322,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 //const chartType = (segmentationType === 'age_group' || segmentationType === 'income_bracket') ? 'line' : 'bar';
 
-                if (segmentation_type === 'purchase_tier'){
+                if (segmentationType === 'purchase_tier') {
                     new Chart(ctx1, {
                         type: 'radar',
                         data: {
-                            labels: labels,
+                            labels,
                             datasets: [{
                                 label: 'Purchase Tier Segmentation',
-                                data: data,
+                                data,
                                 backgroundColor: 'rgba(54, 162, 235, 0.2)',
                                 borderColor: 'rgba(54, 162, 235, 1)',
-                                pointBackgroundColor: 'rgba(54, 162, 235, 1)',
-                                borderWidth: 2,
+                                borderWidth: 2
                             }]
                         },
-                        options:{
+                        options: {
                             responsive: true,
-                            scales: {
-                                r: {
-                                    beginAtZero: true
-                                }
-                            }
+                            scales: { r: { beginAtZero: true } }
                         }
                     });
-                    return;
-                }
-                new Chart(ctx1, {
-                    type: chartType,
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: '<?= ucfirst(str_replace('_', ' ', array_keys($results[0])[1])) ?>',
-                            data: data,
-                            backgroundColor: chartType === 'bar' ? 'rgba(54, 162, 235, 0.6)' : 'rgba(54, 162, 235, 0.2)',
-                            borderColor: 'rgba(54, 162, 235, 1)',
-                            borderWidth: 2,
-                            fill: chartType === 'line'
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        plugins: {
-                            title: {
-                                display: true,
-                                text: 'Customer Distribution by <?= ucfirst(str_replace('_', ' ', $segmentationType)) ?>'
-                            },
-                            legend: {
-                                display: true
-                            }
+                } else {
+                    new Chart(ctx1, {
+                        type: chartType,
+                        data: {
+                            labels,
+                            datasets: [{
+                                label: '<?= ucfirst(str_replace('_', ' ', array_keys($results[0])[1])) ?>',
+                                data,
+                                backgroundColor: chartType === 'bar'
+                                    ? 'rgba(54, 162, 235, 0.6)'
+                                    : 'rgba(54, 162, 235, 0.2)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 2,
+                                fill: chartType === 'line'
+                            }]
                         },
-                        scales: {
-                            y: {
-                                beginAtZero: true
-                            }
+                        options: {
+                            responsive: true,
+                            indexAxis,
+                            scales: { y: { beginAtZero: true } }
                         }
-                    }
-                });
+                    });
+                }
+
 
                 // Pie Chart for Distribution
                 const ctx2 = document.getElementById('pieChart').getContext('2d');
