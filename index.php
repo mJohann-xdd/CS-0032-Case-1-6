@@ -55,6 +55,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $sql = "SELECT CASE WHEN purchase_amount < 1000 THEN 'Low Spender (<1k)' WHEN purchase_amount BETWEEN 1000 AND 3000 THEN 'Medium Spender (1k-3k)' ELSE 'High Spender (>3k)' END AS purchase_tier, COUNT(*) AS total_customers, ROUND(AVG(income), 2) AS avg_income FROM customers GROUP BY purchase_tier ORDER BY purchase_tier";
             break;
 
+        case 'clv_tier':
+            $sql = "SELECT CASE
+                           WHEN (avg_purchase_amount * purchase_frequency * customer_lifespan_years) < 5000
+                                THEN 'Bronze'
+                           WHEN (avg_purchase_amount * purchase_frequency * customer_lifespan_years)
+                                BETWEEN 5000 AND 19999
+                                THEN 'Silver'
+                           WHEN (avg_purchase_amount * purchase_frequency * customer_lifespan_years)
+                                BETWEEN 20000 AND 49999
+                                THEN 'Gold'
+                           ELSE 'Platinum'
+                       END AS clv_tier,
+                       COUNT(*) AS total_customers,
+                       ROUND(AVG(avg_purchase_amount * purchase_frequency * customer_lifespan_years), 2) AS avg_clv
+                FROM customers
+                GROUP BY clv_tier
+                ORDER BY avg_clv DESC";
+            break;
+
         default:
             $sql = "SELECT * FROM customers LIMIT 10"; // Default query
     }
@@ -70,6 +89,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -79,6 +99,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
+
 <body>
     <div class="container mt-5">
         <h1 class="text-center mb-4">Customer Segmentation Dashboard</h1>
@@ -87,9 +108,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="d-flex justify-content-between align-items-center mb-3">
             <div>
                 <a href="run_clustering.php?clusters=5" class="btn btn-success" target="_blank"
-                   title="Run k-means clustering to segment customers">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-gear-fill" viewBox="0 0 16 16" style="vertical-align: -2px;">
-                        <path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z"/>
+                    title="Run k-means clustering to segment customers">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
+                        class="bi bi-gear-fill" viewBox="0 0 16 16" style="vertical-align: -2px;">
+                        <path
+                            d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z" />
                     </svg>
                     Run Clustering
                 </a>
@@ -113,8 +136,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <option value="income_bracket">By Income Bracket</option>
                             <option value="cluster">By Cluster</option>
                             <option value="purchase_tier">By Purchase Tier</option>
+                            <option value="clv_tier">By CLV Tier</option>
                         </select>
                         <button type="submit" class="btn btn-primary">Show Results</button>
+                        <button type="button" class="btn btn-secondary" onclick="exportResults()">Export
+                            Results</button>
                     </div>
                 </div>
             </div>
@@ -167,12 +193,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 let insights = '';
                 const totalCustomers = data.reduce((a, b) => a + b, 0);
 
-                switch(segmentationType) {
+                switch (segmentationType) {
                     case 'gender':
                         insights = `<ul>
                             <li>Total customers analyzed: ${totalCustomers.toLocaleString()}</li>
                             <li>Gender distribution shows ${labels.length} categories</li>
-                            <li>Largest segment: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
+                            <li>Largest segment: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data) / totalCustomers * 100).toFixed(1)}%)</li>
                             ${results.length > 0 && results[0].avg_income ? `<li>Average income across genders ranges from $${Math.min(...results.map(r => parseFloat(r.avg_income))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
                         </ul>`;
                         break;
@@ -181,7 +207,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         insights = `<ul>
                             <li>Total customers across ${labels.length} regions: ${totalCustomers.toLocaleString()}</li>
                             <li>Top region: ${labels[0]} with ${data[0].toLocaleString()} customers</li>
-                            <li>Regional concentration: Top 3 regions represent ${((data[0] + (data[1]||0) + (data[2]||0))/totalCustomers*100).toFixed(1)}% of total customers</li>
+                            <li>Regional concentration: Top 3 regions represent ${((data[0] + (data[1] || 0) + (data[2] || 0)) / totalCustomers * 100).toFixed(1)}% of total customers</li>
                             ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Purchase amounts vary from $${Math.min(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()} across regions</li>` : ''}
                         </ul>`;
                         break;
@@ -189,7 +215,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     case 'age_group':
                         insights = `<ul>
                             <li>Customer base distributed across ${labels.length} age groups</li>
-                            <li>Dominant age group: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
+                            <li>Dominant age group: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data) / totalCustomers * 100).toFixed(1)}%)</li>
                             ${results.length > 0 && results[0].avg_income ? `<li>Income peaks in the ${results.reduce((max, r) => parseFloat(r.avg_income) > parseFloat(max.avg_income) ? r : max).age_group || results[0].age_group} age group at $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
                             ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Highest spending age group: ${results.reduce((max, r) => parseFloat(r.avg_purchase_amount) > parseFloat(max.avg_purchase_amount) ? r : max).age_group || results[0].age_group}</li>` : ''}
                         </ul>`;
@@ -198,7 +224,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     case 'income_bracket':
                         insights = `<ul>
                             <li>Customers segmented into ${labels.length} income brackets</li>
-                            <li>Largest income segment: ${labels[data.indexOf(Math.max(...data))]} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
+                            <li>Largest income segment: ${labels[data.indexOf(Math.max(...data))]} (${(Math.max(...data) / totalCustomers * 100).toFixed(1)}% of customers)</li>
                             ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Purchase behavior: ${results.reduce((max, r) => parseFloat(r.avg_purchase_amount) > parseFloat(max.avg_purchase_amount) ? r : max).income_bracket || results[0].income_bracket} shows highest average spending at $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()}</li>` : ''}
                             <li>Income-purchase correlation can guide targeted marketing strategies</li>
                         </ul>`;
@@ -212,8 +238,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             );
                             insights = `<ul>
                                 <li>Advanced k-means clustering identified <strong>${clusterMetadata.length} distinct customer segments</strong></li>
-                                <li>Largest segment: <strong>${largestCluster.cluster_name}</strong> with ${parseInt(largestCluster.customer_count).toLocaleString()} customers (${((largestCluster.customer_count/totalCustomers)*100).toFixed(1)}%)</li>
-                                <li>Clusters range from "${clusterMetadata[0].cluster_name}" to "${clusterMetadata[clusterMetadata.length-1].cluster_name}"</li>
+                                <li>Largest segment: <strong>${largestCluster.cluster_name}</strong> with ${parseInt(largestCluster.customer_count).toLocaleString()} customers (${((largestCluster.customer_count / totalCustomers) * 100).toFixed(1)}%)</li>
+                                <li>Clusters range from "${clusterMetadata[0].cluster_name}" to "${clusterMetadata[clusterMetadata.length - 1].cluster_name}"</li>
                                 <li>Each cluster has unique demographics, income levels, and purchasing behaviors - view detailed analysis below</li>
                                 <li><strong>Actionable insights:</strong> Scroll down to see cluster characteristics, statistics, visualizations, and marketing recommendations</li>
                             </ul>`;
@@ -232,11 +258,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     case 'purchase_tier':
                         insights = `<ul>
                             <li>Customers categorized into ${labels.length} spending tiers</li>
-                            <li>Largest tier: ${labels[data.indexOf(Math.max(...data))]} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
+                            <li>Largest tier: ${labels[data.indexOf(Math.max(...data))]} (${(Math.max(...data) / totalCustomers * 100).toFixed(1)}% of customers)</li>
                             ${results.length > 0 && results[0].avg_income ? `<li>High spenders correlate with income levels averaging $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
                             <li>Understanding spending tiers enables personalized product recommendations</li>
                         </ul>`;
                         break;
+                        
+                    case 'clv_tier':
+                        const clvValues = results.map(r => parseFloat(r.avg_clv || 0));
+                        const maxCLV = Math.max(...clvValues);
+                        const minCLV = Math.min(...clvValues);
+
+                        const topTierIndex = clvValues.indexOf(maxCLV);
+                        const topTier = labels[topTierIndex];
+                        const topTierCustomers = data[topTierIndex];
+
+                        insights = `<ul>
+                            <li>Total customers evaluated for lifetime value: ${totalCustomers.toLocaleString()}</li>
+                            <li>Customers segmented into ${labels.length} CLV tiers based on long term value</li>
+                            <li>Highest value tier: <strong>${topTier}</strong> with ${topTierCustomers.toLocaleString()} customers (${(topTierCustomers / totalCustomers * 100).toFixed(1)}%)</li>
+                            <li>Average CLV ranges from $${minCLV.toLocaleString()} to $${maxCLV.toLocaleString()}</li>
+                            <li>Gold and Platinum tiers represent the most profitable customers and should be prioritized for retention and loyalty programs</li>
+                            <li>Bronze tier offers growth potential through upselling and engagement strategies</li>
+                        </ul>`;
+                        break;
+
                 }
 
                 document.getElementById('insights').innerHTML = insights;
@@ -333,21 +379,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $total_customers = array_sum(array_column($cluster_metadata, 'customer_count'));
                     foreach ($cluster_metadata as $cluster):
                         $percentage = round(($cluster['customer_count'] / $total_customers) * 100, 1);
-                    ?>
-                    <div class="col-md-6 col-lg-4 mb-3">
-                        <div class="card border-primary h-100">
-                            <div class="card-header bg-primary text-white">
-                                <h6 class="mb-0">Cluster <?= $cluster['cluster_id'] ?>: <?= htmlspecialchars($cluster['cluster_name']) ?></h6>
-                            </div>
-                            <div class="card-body">
-                                <p class="card-text"><?= htmlspecialchars($cluster['description']) ?></p>
-                                <p class="text-muted mb-0">
-                                    <strong><?= number_format($cluster['customer_count']) ?></strong> customers
-                                    (<?= $percentage ?>%)
-                                </p>
+                        ?>
+                        <div class="col-md-6 col-lg-4 mb-3">
+                            <div class="card border-primary h-100">
+                                <div class="card-header bg-primary text-white">
+                                    <h6 class="mb-0">Cluster <?= $cluster['cluster_id'] ?>:
+                                        <?= htmlspecialchars($cluster['cluster_name']) ?></h6>
+                                </div>
+                                <div class="card-body">
+                                    <p class="card-text"><?= htmlspecialchars($cluster['description']) ?></p>
+                                    <p class="text-muted mb-0">
+                                        <strong><?= number_format($cluster['customer_count']) ?></strong> customers
+                                        (<?= $percentage ?>%)
+                                    </p>
+                                </div>
                             </div>
                         </div>
-                    </div>
                     <?php endforeach; ?>
                 </div>
 
@@ -371,16 +418,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 </thead>
                                 <tbody>
                                     <?php foreach ($cluster_metadata as $cluster): ?>
-                                    <tr>
-                                        <td><strong><?= htmlspecialchars($cluster['cluster_name']) ?></strong></td>
-                                        <td><?= number_format($cluster['customer_count']) ?></td>
-                                        <td><?= $cluster['age_min'] ?>-<?= $cluster['age_max'] ?></td>
-                                        <td><?= round($cluster['avg_age'], 1) ?></td>
-                                        <td>$<?= number_format($cluster['avg_income'], 2) ?></td>
-                                        <td>$<?= number_format($cluster['avg_purchase_amount'], 2) ?></td>
-                                        <td><?= htmlspecialchars($cluster['dominant_gender']) ?></td>
-                                        <td><?= htmlspecialchars($cluster['dominant_region']) ?></td>
-                                    </tr>
+                                        <tr>
+                                            <td><strong><?= htmlspecialchars($cluster['cluster_name']) ?></strong></td>
+                                            <td><?= number_format($cluster['customer_count']) ?></td>
+                                            <td><?= $cluster['age_min'] ?>-<?= $cluster['age_max'] ?></td>
+                                            <td><?= round($cluster['avg_age'], 1) ?></td>
+                                            <td>$<?= number_format($cluster['avg_income'], 2) ?></td>
+                                            <td>$<?= number_format($cluster['avg_purchase_amount'], 2) ?></td>
+                                            <td><?= htmlspecialchars($cluster['dominant_gender']) ?></td>
+                                            <td><?= htmlspecialchars($cluster['dominant_region']) ?></td>
+                                        </tr>
                                     <?php endforeach; ?>
                                 </tbody>
                             </table>
@@ -425,23 +472,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <h4 class="mb-3">Recommended Marketing Strategies</h4>
                     </div>
                     <?php foreach ($cluster_metadata as $cluster): ?>
-                    <div class="col-md-6 mb-3">
-                        <div class="card h-100">
-                            <div class="card-header bg-success text-white">
-                                <h6 class="mb-0"><?= htmlspecialchars($cluster['cluster_name']) ?> (<?= number_format($cluster['customer_count']) ?> customers)</h6>
-                            </div>
-                            <div class="card-body">
-                                <ul class="mb-0">
-                                    <?php
-                                    $recommendations = explode(';', $cluster['business_recommendation']);
-                                    foreach ($recommendations as $rec):
-                                    ?>
-                                        <li><?= htmlspecialchars(trim($rec)) ?></li>
-                                    <?php endforeach; ?>
-                                </ul>
+                        <div class="col-md-6 mb-3">
+                            <div class="card h-100">
+                                <div class="card-header bg-success text-white">
+                                    <h6 class="mb-0"><?= htmlspecialchars($cluster['cluster_name']) ?>
+                                        (<?= number_format($cluster['customer_count']) ?> customers)</h6>
+                                </div>
+                                <div class="card-body">
+                                    <ul class="mb-0">
+                                        <?php
+                                        $recommendations = explode(';', $cluster['business_recommendation']);
+                                        foreach ($recommendations as $rec):
+                                            ?>
+                                            <li><?= htmlspecialchars(trim($rec)) ?></li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                </div>
                             </div>
                         </div>
-                    </div>
                     <?php endforeach; ?>
                 </div>
 
@@ -649,7 +697,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <!-- Logout Script -->
     <script>
-        document.querySelector('.btn-danger').addEventListener('click', function(e) {
+        document.querySelector('.btn-danger').addEventListener('click', function (e) {
             e.preventDefault();
             fetch('logout.php')
                 .then(response => response.json())
@@ -661,4 +709,5 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         });
     </script>
 </body>
+
 </html>
