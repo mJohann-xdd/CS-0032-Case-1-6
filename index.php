@@ -123,6 +123,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         </div>
 
+        <!-- High severity alert -->
+        <div class="d-none alert alert-danger alert-dismissible fade show d-flex align-items-start mb-3" role="alert">
+            <div class="me-3 fs-4">⚠</div>
+            <div class="flex-grow-1">
+                <h6 class="alert-heading mb-1">Critical Segment Decline</h6>
+                <p class="mb-1">
+                    High-Income Young Premium segment revenue dropped by <strong>12%</strong> compared to last week.
+                </p>
+                <small class="text-muted">
+                    Detected on 2026-01-15 at 09:42 AM
+                </small>
+            </div>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+
         <!-- Segmentation Form -->
         <form method="POST" class="mb-4">
             <div class="row justify-content-center">
@@ -263,7 +278,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <li>Understanding spending tiers enables personalized product recommendations</li>
                         </ul>`;
                         break;
-                        
+
                     case 'clv_tier':
                         const clvValues = results.map(r => parseFloat(r.avg_clv || 0));
                         const maxCLV = Math.max(...clvValues);
