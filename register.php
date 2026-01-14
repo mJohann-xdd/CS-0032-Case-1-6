@@ -1,19 +1,60 @@
 <?php
+// Secure session configuration
+function configure_secure_session() {
+    // Check if we're on HTTPS (for production)
+    $is_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+                || $_SERVER['SERVER_PORT'] == 443;
+    
+    session_set_cookie_params([
+        'lifetime' => 0,              // Until browser closes
+        'path' => '/',                // Current domain
+        'domain' => '',               // Current domain
+        'secure' => $is_https,        // HTTPS only if available
+        'httponly' => true,           // No JavaScript access
+        'samesite' => 'Strict'        // Strict CSRF protection
+    ]);
+    
+    // Set custom session name
+    session_name('CSAPP_SESSION');
+}
+
+configure_secure_session();
 session_start();
 require_once 'db.php';
+
+// Generate CSRF token
+function generate_csrf_token() {
+    if (!isset($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return $_SESSION['csrf_token'];
+}
+
+// Validate CSRF token
+function validate_csrf_token($token) {
+    if (!isset($_SESSION['csrf_token'])) {
+        return false;
+    }
+    return hash_equals($_SESSION['csrf_token'], $token);
+}
 
 $success_message = '';
 $error_message = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = trim($_POST['username']);
-    $email = trim($_POST['email']);
-    $password = $_POST['password'];
-    $confirm_password = $_POST['confirm_password'];
-    
-    // Validation
-    if (empty($username) || empty($email) || empty($password)) {
-        $error_message = "All fields are required.";
+    // Verify CSRF token
+    $token = $_POST['csrf_token'] ?? '';
+    if (!validate_csrf_token($token)) {
+        $error_message = "Invalid security token. Please refresh the page and try again.";
+    } else {
+        $username = trim($_POST['username']);
+        $email = trim($_POST['email']);
+        $password = $_POST['password'];
+        $confirm_password = $_POST['confirm_password'];
+        
+        // Validation
+        if (empty($username) || empty($email) || empty($password)) {
+            $error_message = "All fields are required.";
     } else if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $error_message = "Invalid email format.";
     } else if (strlen($password) < 8) {
@@ -78,6 +119,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <?php endif; ?>
         
         <form method="POST" class="w-50 mx-auto">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generate_csrf_token(), ENT_QUOTES, 'UTF-8') ?>">
             <div class="mb-3">
                 <label for="username" class="form-label">Username</label>
                 <input type="text" class="form-control" id="username" name="username" 

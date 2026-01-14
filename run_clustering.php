@@ -432,23 +432,16 @@ function updateDatabase($pdo, $labels, $clusterStats) {
     try {
         $pdo->beginTransaction();
 
-        // Clear existing segmentation results
+        // Clear existing segmentation results first (child table)
         $pdo->exec("DELETE FROM segmentation_results");
         echo "✓ Cleared existing segmentation results\n";
 
-        // Insert new cluster assignments
-        $stmt = $pdo->prepare("INSERT INTO segmentation_results (customer_id, cluster_label) VALUES (?, ?)");
-        foreach ($labels as $customerId => $label) {
-            $stmt->execute([$customerId, $label]);
-        }
-        echo "✓ Inserted " . count($labels) . " cluster assignments\n";
-
-        // Clear existing cluster metadata
+        // Clear existing cluster metadata (parent table)
         $pdo->exec("DELETE FROM cluster_metadata");
         echo "✓ Cleared existing cluster metadata\n";
 
-        // Insert new cluster metadata
-        $stmt = $pdo->prepare("
+        // Insert new cluster metadata first (parent table must exist before foreign key references)
+        $metadataStmt = $pdo->prepare("
             INSERT INTO cluster_metadata (
                 cluster_id, cluster_name, description,
                 avg_age, avg_income, avg_purchase_amount,
@@ -463,7 +456,7 @@ function updateDatabase($pdo, $labels, $clusterStats) {
             $description = generateClusterDescription($stats);
             $recommendations = generateBusinessRecommendations($stats);
 
-            $stmt->execute([
+            $metadataStmt->execute([
                 $stats['cluster_id'],
                 $clusterName,
                 $description,
@@ -482,8 +475,14 @@ function updateDatabase($pdo, $labels, $clusterStats) {
                 $recommendations
             ]);
         }
+        echo "✓ Inserted " . count($clusterStats) . " cluster metadata records\n";
 
-        echo "✓ Inserted metadata for " . count($clusterStats) . " clusters\n";
+        // Now insert new cluster assignments (child table references parent)
+        $stmt = $pdo->prepare("INSERT INTO segmentation_results (customer_id, cluster_label) VALUES (?, ?)");
+        foreach ($labels as $customerId => $label) {
+            $stmt->execute([$customerId, $label]);
+        }
+        echo "✓ Inserted " . count($labels) . " cluster assignments\n";
 
         $pdo->commit();
     } catch (PDOException $e) {

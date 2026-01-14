@@ -1,19 +1,210 @@
 <?php
-session_start();
-if (!isset($_SESSION['logged_in'])) {
-    header('Location: login.php');
-    exit;
+// Configuration
+define('SESSION_TIMEOUT', 1800); // 30 minutes in seconds
+define('SESSION_ABSOLUTE_TIMEOUT', 28800); // 8 hours max session lifetime
+
+function configure_secure_session() {
+    // Check if we're on HTTPS (for production)
+    $is_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+                || $_SERVER['SERVER_PORT'] == 443;
+    
+    session_set_cookie_params([
+        'lifetime' => 0,              // Until browser closes
+        'path' => '/',                // Current domain
+        'domain' => '',               // Current domain
+        'secure' => $is_https,        // HTTPS only if available
+        'httponly' => true,           // No JavaScript access
+        'samesite' => 'Strict'        // Strict CSRF protection
+    ]);
+    
+    // Set custom session name
+    session_name('CSAPP_SESSION');
 }
+
+function check_authentication() {
+    if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+        // Not logged in
+        header('Location: login.php?error=not_authenticated');
+        exit;
+    }
+}
+
+function check_inactivity_timeout() {
+    if (isset($_SESSION['last_activity'])) {
+        $inactive_time = time() - $_SESSION['last_activity'];
+        
+        if ($inactive_time > SESSION_TIMEOUT) {
+            // Session expired due to inactivity
+            session_unset();
+            session_destroy();
+            
+            // Start new session for error message
+            session_start();
+            $_SESSION['timeout_message'] = 'Your session expired due to inactivity. Please login again.';
+            
+            header('Location: login.php?error=timeout');
+            exit;
+        }
+    }
+    // Update last activity time
+    $_SESSION['last_activity'] = time();
+}
+
+function check_absolute_timeout() {
+    if (isset($_SESSION['created_at'])) {
+        $session_lifetime = time() - $_SESSION['created_at'];
+        
+        if ($session_lifetime > SESSION_ABSOLUTE_TIMEOUT) {
+            // Session exceeded maximum lifetime
+            session_unset();
+            session_destroy();
+            
+            // Start new session for error message
+            session_start();
+            $_SESSION['timeout_message'] = 'Your session has reached its maximum lifetime (8 hours). Please login again.';
+            
+            header('Location: login.php?error=absolute_timeout');
+            exit;
+        }
+    }
+}
+
+function validate_session_fingerprint() {
+    $current_fingerprint = md5(
+        $_SERVER['HTTP_USER_AGENT'] ?? '' .
+        $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? ''
+    );
+    
+    if (!isset($_SESSION['fingerprint'])) {
+        // First time - set fingerprint
+        $_SESSION['fingerprint'] = $current_fingerprint;
+    } else if ($_SESSION['fingerprint'] !== $current_fingerprint) {
+        // Fingerprint mismatch - possible session hijacking
+        session_unset();
+        session_destroy();
+        
+        // Start new session for error message
+        session_start();
+        $_SESSION['timeout_message'] = 'Session validation failed. Please login again.';
+        
+        header('Location: login.php?error=security');
+        exit;
+    }
+}
+
+/** Main session check function - call this at top of protected pages */
+function secure_session_check() {
+    check_authentication();
+    check_inactivity_timeout();
+    check_absolute_timeout();
+    validate_session_fingerprint();
+}
+
+// Generate CSRF token
+function generate_csrf_token() {
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+    
+    if (!isset($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    
+    return $_SESSION['csrf_token'];
+}
+
+// Get CSRF token (or generate if not exists)
+function get_csrf_token() {
+    return generate_csrf_token();
+}
+
+// Validate CSRF token
+function validate_csrf_token($token) {
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+    
+    if (!isset($_SESSION['csrf_token'])) {
+        return false;
+    }
+    
+    // Use hash_equals to prevent timing attacks
+    return hash_equals($_SESSION['csrf_token'], $token);
+}
+
+// Output CSRF token as hidden input field
+function csrf_token_field() {
+    $token = get_csrf_token();
+    return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($token, ENT_QUOTES, 'UTF-8') . '">';
+}
+
+// Verify CSRF token from POST request, kills script if invalid
+function verify_csrf_token() {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $token = $_POST['csrf_token'] ?? '';
+        
+        if (!validate_csrf_token($token)) {
+            // CSRF attack detected
+            error_log("CSRF attack detected from IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+            
+            http_response_code(403);
+            die(json_encode([
+                'error' => 'Invalid security token. Please refresh the page and try again.',
+                'code' => 'CSRF_INVALID'
+            ]));
+        }
+    }
+}
+
+// Run configuration
+configure_secure_session();
+session_start();
+secure_session_check();
 
 require_once 'db.php';
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Verify CSRF token
+    verify_csrf_token();
+    
     $segmentationType = filter_input(INPUT_POST, 'segmentation_type', FILTER_SANITIZE_STRING);
 
     switch ($segmentationType) {
         case 'gender':
             $sql = "SELECT gender, COUNT(*) AS total_customers, ROUND(AVG(income), 2) AS avg_income, ROUND(AVG(purchase_amount), 2) AS avg_purchase_amount FROM customers GROUP BY gender";
+            break;
+
+            
+
+            "WITH agg AS (
+            SELECT
+                sr.cluster_label,
+                COUNT(*) AS total_customers,
+                ROUND(AVG(c.income),2) AS avg_income,
+                ROUND(AVG(c.purchase_amount),2) AS avg_purchase_amount,
+                MIN(c.age) AS min_age,
+                MAX(c.age) AS max_age
+            FROM segmentation_results sr
+            JOIN customers c USING (customer_id)
+            GROUP BY sr.cluster_label
+            ),
+            dominant_gender AS (
+            SELECT cluster_label, gender AS dominant_gender
+            FROM (
+                SELECT sr2.cluster_label, c2.gender,
+                    ROW_NUMBER() OVER (PARTITION BY sr2.cluster_label ORDER BY COUNT(*) DESC) rn
+                FROM segmentation_results sr2
+                JOIN customers c2 USING (customer_id)
+                GROUP BY sr2.cluster_label, c2.gender
+            ) t
+            WHERE rn = 1
+            )
+            SELECT a.*, dg.dominant_gender, cm.cluster_name, cm.customer_count, cm.description, cm.avg_income AS meta_avg_income
+            FROM agg a
+            LEFT JOIN dominant_gender dg ON dg.cluster_label = a.cluster_label
+            LEFT JOIN cluster_metadata cm ON cm.cluster_id = a.cluster_label
+            ORDER BY a.cluster_label;";
             break;
 
         case 'region':
@@ -169,6 +360,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         <!-- Segmentation Form -->
         <form method="POST" class="mb-4">
+            <?= csrf_token_field() ?>
             <div class="row justify-content-center">
                 <div class="col-md-6">
                     <div class="input-group">
@@ -226,8 +418,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
 
             <script>
-                const segmentationType = '<?= $segmentationType ?>';
-                const results = <?= json_encode($results) ?>;
+                const segmentationType = '<?= htmlspecialchars($segmentationType, ENT_QUOTES, 'UTF-8') ?>';
+                const results = <?= json_encode($results, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+                
+                // HTML escaping function to prevent XSS in dynamic content
+                function escapeHtml(text) {
+                    const div = document.createElement('div');
+                    div.textContent = text;
+                    return div.innerHTML;
+                }
                 
                 // For unassigned, we don't have aggregated data, so handle differently
                 let labels, data, totalCustomers;
@@ -250,7 +449,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         insights = `<ul>
                             <li>Total customers analyzed: ${totalCustomers.toLocaleString()}</li>
                             <li>Gender distribution shows ${labels.length} categories</li>
-                            <li>Largest segment: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
+                            <li>Largest segment: ${escapeHtml(labels[data.indexOf(Math.max(...data))])} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
                             ${results.length > 0 && results[0].avg_income ? `<li>Average income across genders ranges from $${Math.min(...results.map(r => parseFloat(r.avg_income))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
                         </ul>`;
                         break;
@@ -258,7 +457,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     case 'region':
                         insights = `<ul>
                             <li>Total customers across ${labels.length} regions: ${totalCustomers.toLocaleString()}</li>
-                            <li>Top region: ${labels[0]} with ${data[0].toLocaleString()} customers</li>
+                            <li>Top region: ${escapeHtml(labels[0])} with ${data[0].toLocaleString()} customers</li>
                             <li>Regional concentration: Top 3 regions represent ${((data[0] + (data[1]||0) + (data[2]||0))/totalCustomers*100).toFixed(1)}% of total customers</li>
                             ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Purchase amounts vary from $${Math.min(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()} across regions</li>` : ''}
                         </ul>`;
@@ -267,17 +466,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     case 'age_group':
                         insights = `<ul>
                             <li>Customer base distributed across ${labels.length} age groups</li>
-                            <li>Dominant age group: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
-                            ${results.length > 0 && results[0].avg_income ? `<li>Income peaks in the ${results.reduce((max, r) => parseFloat(r.avg_income) > parseFloat(max.avg_income) ? r : max).age_group || results[0].age_group} age group at $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
-                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Highest spending age group: ${results.reduce((max, r) => parseFloat(r.avg_purchase_amount) > parseFloat(max.avg_purchase_amount) ? r : max).age_group || results[0].age_group}</li>` : ''}
+                            <li>Dominant age group: ${escapeHtml(labels[data.indexOf(Math.max(...data))])} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
+                            ${results.length > 0 && results[0].avg_income ? `<li>Income peaks in the ${escapeHtml(results.reduce((max, r) => parseFloat(r.avg_income) > parseFloat(max.avg_income) ? r : max).age_group || results[0].age_group)} age group at $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
+                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Highest spending age group: ${escapeHtml(results.reduce((max, r) => parseFloat(r.avg_purchase_amount) > parseFloat(max.avg_purchase_amount) ? r : max).age_group || results[0].age_group)}</li>` : ''}
                         </ul>`;
                         break;
 
                     case 'income_bracket':
                         insights = `<ul>
                             <li>Customers segmented into ${labels.length} income brackets</li>
-                            <li>Largest income segment: ${labels[data.indexOf(Math.max(...data))]} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
-                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Purchase behavior: ${results.reduce((max, r) => parseFloat(r.avg_purchase_amount) > parseFloat(max.avg_purchase_amount) ? r : max).income_bracket || results[0].income_bracket} shows highest average spending at $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()}</li>` : ''}
+                            <li>Largest income segment: ${escapeHtml(labels[data.indexOf(Math.max(...data))])} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
+                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Purchase behavior: ${escapeHtml(results.reduce((max, r) => parseFloat(r.avg_purchase_amount) > parseFloat(max.avg_purchase_amount) ? r : max).income_bracket || results[0].income_bracket)} shows highest average spending at $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()}</li>` : ''}
                             <li>Income-purchase correlation can guide targeted marketing strategies</li>
                         </ul>`;
                         break;
@@ -290,8 +489,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             );
                             insights = `<ul>
                                 <li>Advanced k-means clustering identified <strong>${clusterMetadata.length} distinct customer segments</strong></li>
-                                <li>Largest segment: <strong>${largestCluster.cluster_name}</strong> with ${parseInt(largestCluster.customer_count).toLocaleString()} customers (${((largestCluster.customer_count/totalCustomers)*100).toFixed(1)}%)</li>
-                                <li>Clusters range from "${clusterMetadata[0].cluster_name}" to "${clusterMetadata[clusterMetadata.length-1].cluster_name}"</li>
+                                <li>Largest segment: <strong>${escapeHtml(largestCluster.cluster_name)}</strong> with ${parseInt(largestCluster.customer_count).toLocaleString()} customers (${((largestCluster.customer_count/totalCustomers)*100).toFixed(1)}%)</li>
+                                <li>Clusters range from "${escapeHtml(clusterMetadata[0].cluster_name)}" to "${escapeHtml(clusterMetadata[clusterMetadata.length-1].cluster_name)}"</li>
                                 <li>Each cluster has unique demographics, income levels, and purchasing behaviors - view detailed analysis below</li>
                                 <li><strong>Actionable insights:</strong> Scroll down to see cluster characteristics, statistics, visualizations, and marketing recommendations</li>
                             </ul>`;
@@ -299,7 +498,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             // Fallback to original insights if metadata not available
                             insights = `<ul>
                                 <li>Machine learning clustering identified ${labels.length} distinct customer segments</li>
-                                <li>Largest cluster: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers</li>
+                                <li>Largest cluster: ${escapeHtml(labels[data.indexOf(Math.max(...data))])} with ${Math.max(...data).toLocaleString()} customers</li>
                                 ${results.length > 0 && results[0].min_age && results[0].max_age ? `<li>Age ranges vary across clusters, providing demographic differentiation</li>` : ''}
                                 <li>Each cluster represents a unique customer profile for targeted campaigns</li>
                                 <li><em>Note: Run the Python clustering script to generate enhanced cluster analysis with detailed explanations</em></li>
@@ -310,7 +509,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     case 'purchase_tier':
                         insights = `<ul>
                             <li>Customers categorized into ${labels.length} spending tiers</li>
-                            <li>Largest tier: ${labels[data.indexOf(Math.max(...data))]} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
+                            <li>Largest tier: ${escapeHtml(labels[data.indexOf(Math.max(...data))])} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
                             ${results.length > 0 && results[0].avg_income ? `<li>High spenders correlate with income levels averaging $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
                             <li>Understanding spending tiers enables personalized product recommendations</li>
                         </ul>`;
