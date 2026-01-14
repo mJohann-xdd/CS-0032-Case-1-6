@@ -513,8 +513,6 @@ if (empty($_SESSION['csrf_token'])) {
                             <option value="unassigned" <?= isset($segmentationType) && $segmentationType === 'unassigned' ? 'selected' : '' ?>>By Unassigned</option>
                         </select>
                         <button type="submit" class="btn btn-primary">Show Results</button>
-                        <button type="button" class="btn btn-secondary" onclick="exportResults()">Export
-                            Results</button>
                     </div>
                 </div>
             </div>
@@ -522,6 +520,34 @@ if (empty($_SESSION['csrf_token'])) {
 
         <!-- Results Table -->
         <?php if (isset($results) && !empty($results)): ?>
+                    <div class="mb-2">
+                    </div>
+            <script>
+            function exportTableToCSV(filename) {
+                const table = document.querySelector('table.table');
+                if (!table) return;
+                let csv = [];
+                const rows = table.querySelectorAll('tr');
+                for (let i = 0; i < rows.length; i++) {
+                    let row = [], cols = rows[i].querySelectorAll('th, td');
+                    for (let j = 0; j < cols.length; j++) {
+                        // Escape double quotes by doubling them
+                        let data = cols[j].innerText.replace(/"/g, '""');
+                        row.push('"' + data + '"');
+                    }
+                    csv.push(row.join(','));
+                }
+                // Download CSV
+                let csvFile = new Blob([csv.join('\n')], { type: 'text/csv' });
+                let downloadLink = document.createElement('a');
+                downloadLink.download = filename;
+                downloadLink.href = window.URL.createObjectURL(csvFile);
+                downloadLink.style.display = 'none';
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+            }
+            </script>
             <table class="table table-striped table-bordered">
                 <thead class="table-dark">
                     <tr>
@@ -561,7 +587,21 @@ if (empty($_SESSION['csrf_token'])) {
             <script>
                 // 1. Initialize Data from PHP
                 const segmentationType = '<?= htmlspecialchars($segmentationType, ENT_QUOTES, 'UTF-8') ?>';
+                // Safe JSON encode
                 const results = <?= json_encode($results, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+                const clusterMetadata = <?= json_encode($cluster_metadata ?? []) ?>;
+                const clusterDetails = <?= json_encode($cluster_details ?? []) ?>;
+
+                // Helper: Prevent XSS in dynamic HTML
+                function escapeHtml(text) {
+                    if (!text) return text;
+                    return text.toString()
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")
+                        .replace(/"/g, "&quot;")
+                        .replace(/'/g, "&#039;");
+                }
 
                 // 2. Data Parsing Logic
                 let labels, data, totalCustomers;
@@ -576,19 +616,111 @@ if (empty($_SESSION['csrf_token'])) {
                     if(results.length > 0) {
                         const keys = Object.keys(results[0]);
                         labels = results.map(row => row[keys[0]]);
-                        data = results.map(row => row[keys[1]]); 
-                        totalCustomers = data.reduce((a, b) => parseFloat(a) + parseFloat(b), 0);
+                        // Ensure data is parsed as float to avoid string concatenation errors
+                        data = results.map(row => parseFloat(row[keys[1]])); 
+                        totalCustomers = data.reduce((a, b) => a + b, 0);
                     } else {
                         labels = []; data = []; totalCustomers = 0;
                     }
                 }
 
                 // 3. Generate Insights Text
+                // Generate insights based on segmentation type
                 let insights = '';
+                
+                totalCustomers = data.reduce((a, b) => a + b, 0);
                 if (totalCustomers === 0 && segmentationType !== 'unassigned') {
                     insights = '<p class="text-warning">No customer data available for analysis.</p>';
-                } else {
-                    insights = `<ul><li>Total records analyzed: <strong>${totalCustomers.toLocaleString()}</strong></li></ul>`;
+                }else{
+                switch(segmentationType) {
+                    case 'gender':
+                        const incomes = results.map(r => parseFloat(r.avg_income));
+                        const incomeGap = results.length > 1 ? (Math.max(...incomes) - Math.min(...incomes)).toFixed(2) : 0;
+                        insights = `<ul>
+                            <li>Total customers analyzed: ${totalCustomers.toLocaleString()}</li>
+                            <li>Gender distribution shows ${labels.length} categories</li>
+                            <li>Largest segment: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
+                            <li>Income gap between genders: $${parseFloat(incomeGap).toLocaleString()}</li>
+                            ${results.length > 0 && results[0].avg_income ? `<li>Average income across genders ranges from $${Math.min(...results.map(r => parseFloat(r.avg_income))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
+                        </ul>`;
+                        break;
+
+                    case 'region':
+                        insights = `<ul>
+                            <li>Total customers across ${labels.length} regions: ${totalCustomers.toLocaleString()}</li>
+                            <li>Top region: ${labels[0]} with ${data[0].toLocaleString()} customers</li>
+                            <li>Regional concentration: Top 3 regions represent ${((data[0] + (data[1]||0) + (data[2]||0))/totalCustomers*100).toFixed(1)}% of total customers</li>
+                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Purchase amounts vary from $${Math.min(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()} across regions</li>` : ''}
+                        </ul>`;
+                        break;
+
+                    case 'age_group':
+                        insights = `<ul>
+                            <li>Customer base distributed across ${labels.length} age groups</li>
+                            <li>Dominant age group: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
+                            ${results.length > 0 && results[0].avg_income ? `<li>Income peaks in the ${results.reduce((max, r) => parseFloat(r.avg_income) > parseFloat(max.avg_income) ? r : max).age_group || results[0].age_group} age group at $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
+                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Highest spending age group: ${results.reduce((max, r) => parseFloat(r.avg_purchase_amount) > parseFloat(max.avg_purchase_amount) ? r : max).age_group || results[0].age_group}</li>` : ''}
+                        </ul>`;
+                        break;
+
+                    case 'income_bracket':
+                        insights = `<ul>
+                            <li>Customers segmented into ${labels.length} income brackets</li>
+                            <li>Largest income segment: ${labels[data.indexOf(Math.max(...data))]} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
+                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Purchase behavior: ${results.reduce((max, r) => parseFloat(r.avg_purchase_amount) > parseFloat(max.avg_purchase_amount) ? r : max).income_bracket || results[0].income_bracket} shows highest average spending at $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()}</li>` : ''}
+                            <li>Income-purchase correlation can guide targeted marketing strategies</li>
+                        </ul>`;
+                        break;
+
+                    case 'cluster':
+                        // Check if we have enhanced metadata
+                        if (typeof clusterMetadata !== 'undefined' && clusterMetadata.length > 0) {
+                            const largestCluster = clusterMetadata.reduce((max, c) =>
+                                c.customer_count > max.customer_count ? c : max
+                            );
+                            insights = `<ul>
+                                <li>Advanced k-means clustering identified <strong>${clusterMetadata.length} distinct customer segments</strong></li>
+                                <li>Largest segment: <strong>${largestCluster.cluster_name}</strong> with ${parseInt(largestCluster.customer_count).toLocaleString()} customers (${((largestCluster.customer_count/totalCustomers)*100).toFixed(1)}%)</li>
+                                <li>Clusters range from "${clusterMetadata[0].cluster_name}" to "${clusterMetadata[clusterMetadata.length-1].cluster_name}"</li>
+                                <li>Each cluster has unique demographics, income levels, and purchasing behaviors - view detailed analysis below</li>
+                                <li><strong>Actionable insights:</strong> Scroll down to see cluster characteristics, statistics, visualizations, and marketing recommendations</li>
+                            </ul>`;
+                        } else {
+                            // Fallback to original insights if metadata not available
+                            insights = `<ul>
+                                <li>Machine learning clustering identified ${labels.length} distinct customer segments</li>
+                                <li>Largest cluster: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers</li>
+                                ${results.length > 0 && results[0].min_age && results[0].max_age ? `<li>Age ranges vary across clusters, providing demographic differentiation</li>` : ''}
+                                <li>Each cluster represents a unique customer profile for targeted campaigns</li>
+                                <li><em>Note: Run the Python clustering script to generate enhanced cluster analysis with detailed explanations</em></li>
+                            </ul>`;
+                        }
+                        break;
+
+                    case 'purchase_tier':
+                        insights = `<ul>
+                            <li>Customers categorized into ${labels.length} spending tiers</li>
+                            <li>Largest tier: ${labels[data.indexOf(Math.max(...data))]} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
+                            ${results.length > 0 && results[0].avg_income ? `<li>High spenders correlate with income levels averaging $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
+                            <li>Understanding spending tiers enables personalized product recommendations</li>
+                        </ul>`;
+                        break;
+                    case 'clv_tier':
+                        insights = `<ul>
+                            <li><strong>Customer Value Hierarchy:</strong> Segmented by Lifetime Value (Avg Purchase × Freq × Lifespan).</li>
+                            <li><strong>Dominant Tier:</strong> ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers.</li>
+                            ${results.length > 0 && results[0].avg_clv ? `<li><strong>Value Gap:</strong> The average Platinum customer is worth $${Math.max(...results.map(r => parseFloat(r.avg_clv))).toLocaleString()}, significantly higher than Bronze users ($${Math.min(...results.map(r => parseFloat(r.avg_clv))).toLocaleString()}).</li>` : ''}
+                            <li><strong>Strategy:</strong> Focus on moving 'Silver' customers to 'Gold' by increasing their purchase frequency or retention (lifespan).</li>
+                        </ul>`;
+                        break;
+                    case 'unassigned':
+                        insights = `<ul>
+                            <li>Found <strong>${totalCustomers.toLocaleString()} customers</strong> not assigned to any cluster.</li>
+                            <li><strong>Action:</strong> Run the Python clustering script to assign these customers.</li>
+                        </ul>`;
+                        break;
+
+                }
                 }
                 
                 // Update the insights div and hidden input for export
@@ -845,9 +977,7 @@ if (empty($_SESSION['csrf_token'])) {
 
                 <!-- Additional Charts JavaScript -->
                 <script>
-                    // Prepare data for advanced visualizations
-                    const clusterMetadata = <?= json_encode($cluster_metadata) ?>;
-                    const clusterDetails = <?= json_encode($cluster_details) ?>;
+                    
 
                     // Chart colors for clusters
                     const clusterColors = [
