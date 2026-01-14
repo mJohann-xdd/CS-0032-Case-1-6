@@ -163,13 +163,64 @@ secure_session_check();
 
 require_once 'db.php';
 
-// Handle form submission
+// Handle Form Submission & Security Validation
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Verify CSRF token
     verify_csrf_token();
     
     $segmentationType = filter_input(INPUT_POST, 'segmentation_type', FILTER_SANITIZE_STRING);
 
+     // CSRF Validation
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        http_response_code(403);
+        die("Security Error: CSRF Token Validation Failed.");
+    }
+
+    $cluster_metadata = [];
+    $cluster_details = [];
+
+    // --- CACHING LAYER START ---
+    // 1. Setup Cache Location (Creates a 'cache' folder if missing)
+    $cacheDir = __DIR__ . '/cache';
+    if (!is_dir($cacheDir)) {
+        mkdir($cacheDir, 0777, true);
+    }
+
+    // 2. Define Cache Key and Lifetime (1 Hour)
+    $cacheFile = $cacheDir . '/segment_' . $segmentationType . '.json';
+    $cacheLifetime = 3600; 
+    $isCached = false;
+
+    // 3. CHECK CACHE: If file exists and is less than 1 hour old
+    if (file_exists($cacheFile) && (time() - filemtime($cacheFile) < $cacheLifetime)) {
+        // LOAD FROM FILE (Fast!)
+        $results = json_decode(file_get_contents($cacheFile), true);
+        $isCached = true;
+        
+        // Set a dummy SQL for export just so it doesn't break
+        $_SESSION['export_sql'] = "SELECT 'Data loaded from cache for $segmentationType'";
+        $_SESSION['is_cached'] = true; // Optional: To show a badge in UI
+
+        if ($segmentationType === 'cluster') {
+            try {
+                $metadata_sql = "SELECT * FROM cluster_metadata ORDER BY cluster_id";
+                $metadata_stmt = $pdo->query($metadata_sql);
+                $cluster_metadata = $metadata_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $detail_sql = "SELECT c.customer_id, c.age, c.income, c.purchase_amount, sr.cluster_label
+                               FROM customers c
+                               JOIN segmentation_results sr ON c.customer_id = sr.customer_id
+                               ORDER BY sr.cluster_label";
+                $detail_stmt = $pdo->query($detail_sql);
+                $cluster_details = $detail_stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (PDOException $e) {
+                $cluster_metadata = [];
+                $cluster_details = [];
+            }
+        }
+    } 
+    else {
+        
     switch ($segmentationType) {
         case 'gender':
             $sql = "SELECT gender, COUNT(*) AS total_customers, ROUND(AVG(income), 2) AS avg_income, ROUND(AVG(purchase_amount), 2) AS avg_purchase_amount FROM customers GROUP BY gender";
@@ -293,7 +344,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'purchase_tier':
             $sql = "SELECT CASE WHEN purchase_amount < 1000 THEN 'Low Spender (<1k)' WHEN purchase_amount BETWEEN 1000 AND 3000 THEN 'Medium Spender (1k-3k)' ELSE 'High Spender (>3k)' END AS purchase_tier, COUNT(*) AS total_customers, ROUND(AVG(income), 2) AS avg_income FROM customers GROUP BY purchase_tier ORDER BY purchase_tier";
             break;
-        
+        case 'clv_tier':
+            // Logic: CLV = Purchase Amount * Frequency * Lifespan
+            // Tiers: Bronze (<50k), Silver (50k-150k), Gold (150k-300k), Platinum (>300k)
+            $sql = "SELECT 
+                        CASE 
+                            WHEN (purchase_amount * purchase_frequency * customer_lifespan) < 50000 THEN 'Bronze (<50k)'
+                            WHEN (purchase_amount * purchase_frequency * customer_lifespan) BETWEEN 50000 AND 150000 THEN 'Silver (50k-150k)'
+                            WHEN (purchase_amount * purchase_frequency * customer_lifespan) BETWEEN 150001 AND 300000 THEN 'Gold (150k-300k)'
+                            ELSE 'Platinum (>300k)'
+                        END AS clv_tier, 
+                        COUNT(*) AS total_customers, 
+                        ROUND(AVG(income), 2) AS avg_income, 
+                        ROUND(AVG(purchase_amount * purchase_frequency * customer_lifespan), 2) AS avg_clv 
+                    FROM customers 
+                    GROUP BY clv_tier 
+                    ORDER BY avg_clv ASC";
+            break;        
         case 'unassigned':
             $sql = "SELECT
                         c.customer_id,
@@ -316,12 +383,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $sql = "SELECT * FROM customers LIMIT 10"; // Default query
     }
 
-    try {
-        $stmt = $pdo->query($sql);
-        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (PDOException $e) {
-        die("Query execution failed: " . $e->getMessage());
+        $_SESSION['export_sql'] = $sql;
+        $_SESSION['is_cached'] = false;
+
+        try {
+            $stmt = $pdo->query($sql);
+            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // 4. SAVE TO CACHE (Only if we have results)
+            if (!empty($results)) {
+                file_put_contents($cacheFile, json_encode($results));
+            }
+
+        } catch (PDOException $e) {
+            die("Query execution failed: " . $e->getMessage());
+        }
     }
+}
+// CSRF Token Initialization (For next form display)
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 ?>
 
@@ -357,6 +438,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <a href="logout.php" class="btn btn-danger">Logout</a>
             </div>
         </div>
+
+        <button type="button" class="btn btn-primary ms-0" data-bs-toggle="modal" data-bs-target="#exportModal">
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="16" fill="currentColor" class="bi bi-download" viewBox="0 0 16 16" style="vertical-align: -1px;">
+             <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+                <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
+          </svg>
+         Export Results
+        </button>
+        <a href="history.php" class="btn btn-outline-secondary px-1 py-0 ms-1">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-clock-history" viewBox="0 0 16 16" style="vertical-align: -1px;">
+                <path d="M8.515 1.019A7 7 0 0 0 8 1V0a8 8 0 0 1 .589.022l-.074.997zm2.004.45a7.003 7.003 0 0 0-.985-.299l.219-.976c.383.086.76.2 1.126.342l-.36.933zm1.37.71a7.01 7.01 0 0 0-.439-.27l.493-.87a8.025 8.025 0 0 1 .979.654l-.615.789a6.996 6.996 0 0 0-.418-.302zm1.834 1.79a6.99 6.99 0 0 0-.653-.796l.724-.69c.27.285.52.59.747.91l-.818.576zm.744 1.352a7.08 7.08 0 0 0-.214-.468l.893-.45a7.976 7.976 0 0 1 .45 1.088l-.95.313a7.023 7.023 0 0 0-.179-.483zm.53 2.507a6.991 6.991 0 0 0-.1-1.025l.985-.17c.067.386.106.778.116 1.17l-1 .025zm-.131 1.538c.033-.17.06-.339.081-.51l.993.123a7.957 7.957 0 0 1-.23 1.155l-.964-.267c.046-.165.086-.332.12-.501zm-.952 2.379c.184-.29.346-.594.486-.908l.914.405c-.16.36-.345.706-.555 1.038l-.845-.535zm-.964 1.205c.122-.122.239-.248.35-.378l.758.653a8.073 8.073 0 0 1-.401.432l-.707-.707z"/>
+                <path d="M8 1a7 7 0 1 0 4.95 11.95l.707.707A8.001 8.001 0 1 1 8 0v1z"/>
+                <path d="M7.5 3a.5.5 0 0 1 .5.5v5.21l3.248 1.856a.5.5 0 0 1-.496.868l-3.5-2A.5.5 0 0 1 7.5 8.5V3z"/>
+            </svg>
+            History
+        </a>
+        <div class="modal fade" id="exportModal" tabindex="-1">
+           <div class="modal-dialog">
+            <div class="modal-content text-dark"> <form action="export.php" method="POST" id="exportForm">
+                <div class="modal-header">
+                <h5 class="modal-title">Export Options</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+                <div class="modal-body">
+                <div class="mb-3">
+                     <label class="form-label">Format:</label>
+                     <select name="format" class="form-select">
+                         <option value="csv">CSV (Data Only)</option>
+                        <option value="pdf">PDF (Includes Charts)</option>
+                        <option value="excel">Excel (Includes Charts)</option>
+                     </select>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Select Columns to Export:</label>
+                    <div class="border p-2 rounded" style="max-height: 200px; overflow-y: auto;">
+                        <?php if (isset($results) && !empty($results)): ?>
+                            <?php 
+                            // Get column names from the first row of the results
+                            $columns = array_keys($results[0]); 
+                            foreach ($columns as $col): 
+                                // Create a nice label (e.g., "avg_income" -> "Avg Income")
+                                $label = ucwords(str_replace('_', ' ', $col));
+                            ?>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="cols[]" value="<?= $col ?>" checked id="col_<?= $col ?>"> 
+                                    <label class="form-check-label" for="col_<?= $col ?>">
+                                        <?= $label ?>
+                                    </label>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <p class="text-muted small">Please run a segmentation query first to see available columns.</p>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+                <input type="hidden" name="chart_image_main" id="chart_image_main">
+                <input type="hidden" name="chart_image_pie" id="chart_image_pie">
+                <input type="hidden" name="analysis_insights" id="analysis_insights_input">
+            </div>
+        <div class="modal-footer">
+        <button type="submit" class="btn btn-primary" onclick="prepareExport()">Download</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
 
         <!-- Segmentation Form -->
         <form method="POST" class="mb-4">
@@ -443,13 +592,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 // Generate insights based on segmentation type
                 let insights = '';
-
+                const totalCustomers = data.reduce((a, b) => a + b, 0);
+                if (totalCustomers === 0) {
+                    insights = '<p class="text-warning">No customer data available for analysis.</p>';
+                }else{
                 switch(segmentationType) {
                     case 'gender':
+                        const incomes = results.map(r => parseFloat(r.avg_income));
+                        const incomeGap = results.length > 1 ? (Math.max(...incomes) - Math.min(...incomes)).toFixed(2) : 0;
                         insights = `<ul>
                             <li>Total customers analyzed: ${totalCustomers.toLocaleString()}</li>
                             <li>Gender distribution shows ${labels.length} categories</li>
-                            <li>Largest segment: ${escapeHtml(labels[data.indexOf(Math.max(...data))])} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
+                            <li>Largest segment: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
+                            <li>Income gap between genders: $${parseFloat(incomeGap).toLocaleString()}</li>
                             ${results.length > 0 && results[0].avg_income ? `<li>Average income across genders ranges from $${Math.min(...results.map(r => parseFloat(r.avg_income))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
                         </ul>`;
                         break;
@@ -514,6 +669,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <li>Understanding spending tiers enables personalized product recommendations</li>
                         </ul>`;
                         break;
+                    case 'clv_tier':
+                        insights = `<ul>
+                            <li><strong>Customer Value Hierarchy:</strong> Segmented by Lifetime Value (Avg Purchase × Freq × Lifespan).</li>
+                            <li><strong>Dominant Tier:</strong> ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers.</li>
+                            ${results.length > 0 && results[0].avg_clv ? `<li><strong>Value Gap:</strong> The average Platinum customer is worth $${Math.max(...results.map(r => parseFloat(r.avg_clv))).toLocaleString()}, significantly higher than Bronze users ($${Math.min(...results.map(r => parseFloat(r.avg_clv))).toLocaleString()}).</li>` : ''}
+                            <li><strong>Strategy:</strong> Focus on moving 'Silver' customers to 'Gold' by increasing their purchase frequency or retention (lifespan).</li>
+                        </ul>`;
+                        break;
+                }
 
                     case 'unassigned':
                         const unassignedCount = results.length;
@@ -545,8 +709,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Main Bar/Line Chart
                 const ctx1 = document.getElementById('mainChart').getContext('2d');
                 const chartType = (segmentationType === 'age_group' || segmentationType === 'income_bracket') ? 'line' : 'bar';
-
-                if (segmentationType === 'unassigned') {
+                
+                if (segmentationType === 'purchase_tier') {
+                    new Chart(ctx1, {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'Total Customers',
+                                data: data,
+                                backgroundColor: 'rgba(54, 162, 235, 0.6)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            indexAxis: 'y', 
+                            responsive: true,
+                            plugins: {
+                                title: {
+                                    display: true,
+                                    text: 'Customer Distribution by Purchase Tier'
+                                },
+                                legend: {
+                                    display: true
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    beginAtZero: true,
+                                    title: {
+                                        display: true,
+                                        text: 'Number of Customers'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }else if (segmentationType === 'region') {
+                    new Chart(ctx1, {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'Total Customers',
+                                data: data,
+                                backgroundColor: 'rgba(75, 192, 192, 0.6)',
+                                borderColor: 'rgba(75, 192, 192, 1)',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            indexAxis: 'y', 
+                            responsive: true,
+                            plugins: {
+                                title: {
+                                    display: true,
+                                    text: 'Customer Distribution by Region'
+                                },
+                                legend: {
+                                    display: true
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    beginAtZero: true,
+                                    title: {
+                                        display: true,
+                                        text: 'Number of Customers'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }else {
+                    if (segmentationType === 'unassigned') {
                     // For unassigned, show demographic breakdown instead
                     const genderCounts = {};
                     const regionCounts = {};
@@ -618,17 +855,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                     });
                 }
-
-                // Pie Chart for Distribution
-                const ctx2 = document.getElementById('pieChart').getContext('2d');
-                const colors = [
-                    'rgba(255, 99, 132, 0.8)',
-                    'rgba(54, 162, 235, 0.8)',
-                    'rgba(255, 206, 86, 0.8)',
-                    'rgba(75, 192, 192, 0.8)',
-                    'rgba(153, 102, 255, 0.8)',
-                    'rgba(255, 159, 64, 0.8)'
-                ];
+                }
+            const ctx2 = document.getElementById('pieChart').getContext('2d');
+            const colors = [
+                'rgba(255, 99, 132, 0.8)',
+                'rgba(54, 162, 235, 0.8)',
+                'rgba(255, 206, 86, 0.8)',
+                'rgba(75, 192, 192, 0.8)',
+                'rgba(153, 102, 255, 0.8)',
+                'rgba(255, 159, 64, 0.8)'
+            ];
 
                 if (segmentationType === 'unassigned') {
                     // For unassigned, show region breakdown
@@ -668,41 +904,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                     });
                 } else {
-                    new Chart(ctx2, {
-                        type: 'pie',
-                        data: {
-                            labels: labels,
-                            datasets: [{
-                                data: data,
-                                backgroundColor: colors.slice(0, labels.length),
-                                borderWidth: 2,
-                                borderColor: '#fff'
-                            }]
-                        },
-                        options: {
-                            responsive: true,
-                            plugins: {
-                                title: {
-                                    display: true,
-                                    text: 'Distribution %'
-                                },
-                                legend: {
-                                    position: 'bottom',
-                                    labels: {
-                                        boxWidth: 15,
-                                        font: {
-                                            size: 10
-                                        }
+                new Chart(ctx2, {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: data,
+                            backgroundColor: colors.slice(0, labels.length),
+                            borderWidth: 2,
+                            borderColor: '#fff'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: 'Distribution %'
+                            },
+                            legend: {
+                                position: 'bottom',
+                                labels: {
+                                    boxWidth: 15,
+                                    font: {
+                                        size: 10
                                     }
                                 }
                             }
                         }
+                    }
                     });
                 }
             </script>
 
             <!-- Enhanced Cluster Visualizations -->
-            <?php if ($segmentationType === 'cluster' && !empty($cluster_metadata)): ?>
+            <?php 
+                if ($segmentationType === 'cluster' && !empty($cluster_metadata)): ?>
                 <hr class="my-5">
 
                 <!-- Section 1: Cluster Characteristics -->
@@ -1050,5 +1287,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 });
         });
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
