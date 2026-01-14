@@ -377,6 +377,7 @@ if (empty($_SESSION['csrf_token'])) {
 
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -386,6 +387,7 @@ if (empty($_SESSION['csrf_token'])) {
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
+
 <body>
     <div class="container mt-5">
         <h1 class="text-center mb-4">Customer Segmentation Dashboard</h1>
@@ -394,9 +396,11 @@ if (empty($_SESSION['csrf_token'])) {
         <div class="d-flex justify-content-between align-items-center mb-3">
             <div>
                 <a href="run_clustering.php?clusters=5" class="btn btn-success" target="_blank"
-                   title="Run k-means clustering to segment customers">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-gear-fill" viewBox="0 0 16 16" style="vertical-align: -2px;">
-                        <path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z"/>
+                    title="Run k-means clustering to segment customers">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
+                        class="bi bi-gear-fill" viewBox="0 0 16 16" style="vertical-align: -2px;">
+                        <path
+                            d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z" />
                     </svg>
                     Run Clustering
                 </a>
@@ -476,6 +480,21 @@ if (empty($_SESSION['csrf_token'])) {
   </div>
 </div>
 
+        <!-- High severity alert -->
+        <div class="d-none alert alert-danger alert-dismissible fade show d-flex align-items-start mb-3" role="alert">
+            <div class="me-3 fs-4">⚠</div>
+            <div class="flex-grow-1">
+                <h6 class="alert-heading mb-1">Critical Segment Decline</h6>
+                <p class="mb-1">
+                    High-Income Young Premium segment revenue dropped by <strong>12%</strong> compared to last week.
+                </p>
+                <small class="text-muted">
+                    Detected on 2026-01-15 at 09:42 AM
+                </small>
+            </div>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+
         <!-- Segmentation Form -->
         <form method="POST" class="mb-4">
             <?= csrf_token_field() ?>
@@ -494,6 +513,8 @@ if (empty($_SESSION['csrf_token'])) {
                             <option value="unassigned" <?= isset($segmentationType) && $segmentationType === 'unassigned' ? 'selected' : '' ?>>By Unassigned</option>
                         </select>
                         <button type="submit" class="btn btn-primary">Show Results</button>
+                        <button type="button" class="btn btn-secondary" onclick="exportResults()">Export
+                            Results</button>
                     </div>
                 </div>
             </div>
@@ -708,21 +729,22 @@ if (empty($_SESSION['csrf_token'])) {
                     $total_customers = array_sum(array_column($cluster_metadata, 'customer_count'));
                     foreach ($cluster_metadata as $cluster):
                         $percentage = round(($cluster['customer_count'] / $total_customers) * 100, 1);
-                    ?>
-                    <div class="col-md-6 col-lg-4 mb-3">
-                        <div class="card border-primary h-100">
-                            <div class="card-header bg-primary text-white">
-                                <h6 class="mb-0">Cluster <?= $cluster['cluster_id'] ?>: <?= htmlspecialchars($cluster['cluster_name']) ?></h6>
-                            </div>
-                            <div class="card-body">
-                                <p class="card-text"><?= htmlspecialchars($cluster['description']) ?></p>
-                                <p class="text-muted mb-0">
-                                    <strong><?= number_format($cluster['customer_count']) ?></strong> customers
-                                    (<?= $percentage ?>%)
-                                </p>
+                        ?>
+                        <div class="col-md-6 col-lg-4 mb-3">
+                            <div class="card border-primary h-100">
+                                <div class="card-header bg-primary text-white">
+                                    <h6 class="mb-0">Cluster <?= $cluster['cluster_id'] ?>:
+                                        <?= htmlspecialchars($cluster['cluster_name']) ?></h6>
+                                </div>
+                                <div class="card-body">
+                                    <p class="card-text"><?= htmlspecialchars($cluster['description']) ?></p>
+                                    <p class="text-muted mb-0">
+                                        <strong><?= number_format($cluster['customer_count']) ?></strong> customers
+                                        (<?= $percentage ?>%)
+                                    </p>
+                                </div>
                             </div>
                         </div>
-                    </div>
                     <?php endforeach; ?>
                 </div>
 
@@ -746,16 +768,16 @@ if (empty($_SESSION['csrf_token'])) {
                                 </thead>
                                 <tbody>
                                     <?php foreach ($cluster_metadata as $cluster): ?>
-                                    <tr>
-                                        <td><strong><?= htmlspecialchars($cluster['cluster_name']) ?></strong></td>
-                                        <td><?= number_format($cluster['customer_count']) ?></td>
-                                        <td><?= $cluster['age_min'] ?>-<?= $cluster['age_max'] ?></td>
-                                        <td><?= round($cluster['avg_age'], 1) ?></td>
-                                        <td>$<?= number_format($cluster['avg_income'], 2) ?></td>
-                                        <td>$<?= number_format($cluster['avg_purchase_amount'], 2) ?></td>
-                                        <td><?= htmlspecialchars($cluster['dominant_gender']) ?></td>
-                                        <td><?= htmlspecialchars($cluster['dominant_region']) ?></td>
-                                    </tr>
+                                        <tr>
+                                            <td><strong><?= htmlspecialchars($cluster['cluster_name']) ?></strong></td>
+                                            <td><?= number_format($cluster['customer_count']) ?></td>
+                                            <td><?= $cluster['age_min'] ?>-<?= $cluster['age_max'] ?></td>
+                                            <td><?= round($cluster['avg_age'], 1) ?></td>
+                                            <td>$<?= number_format($cluster['avg_income'], 2) ?></td>
+                                            <td>$<?= number_format($cluster['avg_purchase_amount'], 2) ?></td>
+                                            <td><?= htmlspecialchars($cluster['dominant_gender']) ?></td>
+                                            <td><?= htmlspecialchars($cluster['dominant_region']) ?></td>
+                                        </tr>
                                     <?php endforeach; ?>
                                 </tbody>
                             </table>
@@ -800,23 +822,24 @@ if (empty($_SESSION['csrf_token'])) {
                         <h4 class="mb-3">Recommended Marketing Strategies</h4>
                     </div>
                     <?php foreach ($cluster_metadata as $cluster): ?>
-                    <div class="col-md-6 mb-3">
-                        <div class="card h-100">
-                            <div class="card-header bg-success text-white">
-                                <h6 class="mb-0"><?= htmlspecialchars($cluster['cluster_name']) ?> (<?= number_format($cluster['customer_count']) ?> customers)</h6>
-                            </div>
-                            <div class="card-body">
-                                <ul class="mb-0">
-                                    <?php
-                                    $recommendations = explode(';', $cluster['business_recommendation']);
-                                    foreach ($recommendations as $rec):
-                                    ?>
-                                        <li><?= htmlspecialchars(trim($rec)) ?></li>
-                                    <?php endforeach; ?>
-                                </ul>
+                        <div class="col-md-6 mb-3">
+                            <div class="card h-100">
+                                <div class="card-header bg-success text-white">
+                                    <h6 class="mb-0"><?= htmlspecialchars($cluster['cluster_name']) ?>
+                                        (<?= number_format($cluster['customer_count']) ?> customers)</h6>
+                                </div>
+                                <div class="card-body">
+                                    <ul class="mb-0">
+                                        <?php
+                                        $recommendations = explode(';', $cluster['business_recommendation']);
+                                        foreach ($recommendations as $rec):
+                                            ?>
+                                            <li><?= htmlspecialchars(trim($rec)) ?></li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                </div>
                             </div>
                         </div>
-                    </div>
                     <?php endforeach; ?>
                 </div>
 
@@ -1033,7 +1056,7 @@ if (empty($_SESSION['csrf_token'])) {
 
     <!-- Logout Script -->
     <script>
-        document.querySelector('.btn-danger').addEventListener('click', function(e) {
+        document.querySelector('.btn-danger').addEventListener('click', function (e) {
             e.preventDefault();
             fetch('logout.php')
                 .then(response => response.json())
@@ -1046,4 +1069,5 @@ if (empty($_SESSION['csrf_token'])) {
     </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
 </body>
+
 </html>

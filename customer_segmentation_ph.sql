@@ -20121,6 +20121,30 @@ INSERT INTO `segmentation_results` (`result_id`, `customer_id`, `cluster_label`)
 (46383, 10000, 3);
 
 --
+-- Table structure for table `export_history`
+--
+DROP TABLE IF EXISTS `export_history`;
+CREATE TABLE export_history (
+  export_id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  export_type ENUM('CSV','PDF','EXCEL') NOT NULL,
+  segmentation_type VARCHAR(50) NOT NULL,
+  selected_columns TEXT NOT NULL,
+  filters_applied TEXT DEFAULT NULL,
+  file_name VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+--
+-- Additional columns for customers table for CLV segmaentation
+--
+ALTER TABLE customers
+ADD COLUMN purchase_frequency INT DEFAULT 0,
+ADD COLUMN customer_lifespan_years DECIMAL(5,2) DEFAULT 0,
+ADD COLUMN avg_purchase_amount DECIMAL(10,2) DEFAULT 0;
+
+
+--
 -- Indexes for dumped tables
 --
 
