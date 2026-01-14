@@ -7,6 +7,8 @@ if (!isset($_SESSION['logged_in'])) {
 
 require_once 'db.php';
 
+// test edit
+
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $segmentationType = filter_input(INPUT_POST, 'segmentation_type', FILTER_SANITIZE_STRING);
