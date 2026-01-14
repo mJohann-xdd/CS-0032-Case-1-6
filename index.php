@@ -226,38 +226,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $sql = "SELECT gender, COUNT(*) AS total_customers, ROUND(AVG(income), 2) AS avg_income, ROUND(AVG(purchase_amount), 2) AS avg_purchase_amount FROM customers GROUP BY gender";
             break;
 
-            
-
-            "WITH agg AS (
-            SELECT
-                sr.cluster_label,
-                COUNT(*) AS total_customers,
-                ROUND(AVG(c.income),2) AS avg_income,
-                ROUND(AVG(c.purchase_amount),2) AS avg_purchase_amount,
-                MIN(c.age) AS min_age,
-                MAX(c.age) AS max_age
-            FROM segmentation_results sr
-            JOIN customers c USING (customer_id)
-            GROUP BY sr.cluster_label
-            ),
-            dominant_gender AS (
-            SELECT cluster_label, gender AS dominant_gender
-            FROM (
-                SELECT sr2.cluster_label, c2.gender,
-                    ROW_NUMBER() OVER (PARTITION BY sr2.cluster_label ORDER BY COUNT(*) DESC) rn
-                FROM segmentation_results sr2
-                JOIN customers c2 USING (customer_id)
-                GROUP BY sr2.cluster_label, c2.gender
-            ) t
-            WHERE rn = 1
-            )
-            SELECT a.*, dg.dominant_gender, cm.cluster_name, cm.customer_count, cm.description, cm.avg_income AS meta_avg_income
-            FROM agg a
-            LEFT JOIN dominant_gender dg ON dg.cluster_label = a.cluster_label
-            LEFT JOIN cluster_metadata cm ON cm.cluster_id = a.cluster_label
-            ORDER BY a.cluster_label;";
-            break;
-
         case 'region':
             $sql = "SELECT region, COUNT(*) AS total_customers, ROUND(AVG(income), 2) AS avg_income, ROUND(AVG(purchase_amount), 2) AS avg_purchase_amount FROM customers GROUP BY region ORDER BY total_customers DESC";
             break;
@@ -345,21 +313,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $sql = "SELECT CASE WHEN purchase_amount < 1000 THEN 'Low Spender (<1k)' WHEN purchase_amount BETWEEN 1000 AND 3000 THEN 'Medium Spender (1k-3k)' ELSE 'High Spender (>3k)' END AS purchase_tier, COUNT(*) AS total_customers, ROUND(AVG(income), 2) AS avg_income FROM customers GROUP BY purchase_tier ORDER BY purchase_tier";
             break;
         case 'clv_tier':
-            // Logic: CLV = Purchase Amount * Frequency * Lifespan
-            // Tiers: Bronze (<50k), Silver (50k-150k), Gold (150k-300k), Platinum (>300k)
+            // Note: Simplified CLV estimation using purchase_amount only
+            // Tiers: Bronze (<5k), Silver (5k-10k), Gold (10k-20k), Platinum (>20k)
             $sql = "SELECT 
                         CASE 
-                            WHEN (purchase_amount * purchase_frequency * customer_lifespan) < 50000 THEN 'Bronze (<50k)'
-                            WHEN (purchase_amount * purchase_frequency * customer_lifespan) BETWEEN 50000 AND 150000 THEN 'Silver (50k-150k)'
-                            WHEN (purchase_amount * purchase_frequency * customer_lifespan) BETWEEN 150001 AND 300000 THEN 'Gold (150k-300k)'
-                            ELSE 'Platinum (>300k)'
+                            WHEN purchase_amount < 5000 THEN 'Bronze (<5k)'
+                            WHEN purchase_amount BETWEEN 5000 AND 9999 THEN 'Silver (5k-10k)'
+                            WHEN purchase_amount BETWEEN 10000 AND 19999 THEN 'Gold (10k-20k)'
+                            ELSE 'Platinum (>20k)'
                         END AS clv_tier, 
                         COUNT(*) AS total_customers, 
                         ROUND(AVG(income), 2) AS avg_income, 
-                        ROUND(AVG(purchase_amount * purchase_frequency * customer_lifespan), 2) AS avg_clv 
+                        ROUND(AVG(purchase_amount), 2) AS avg_purchase_amount 
                     FROM customers 
                     GROUP BY clv_tier 
-                    ORDER BY avg_clv ASC";
+                    ORDER BY avg_purchase_amount ASC";
             break;        
         case 'unassigned':
             $sql = "SELECT
@@ -381,6 +349,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         default:
             $sql = "SELECT * FROM customers LIMIT 10"; // Default query
+            break;
     }
 
         $_SESSION['export_sql'] = $sql;
@@ -521,6 +490,7 @@ if (empty($_SESSION['csrf_token'])) {
                             <option value="income_bracket" <?= isset($segmentationType) && $segmentationType === 'income_bracket' ? 'selected' : '' ?>>By Income Bracket</option>
                             <option value="cluster" <?= isset($segmentationType) && $segmentationType === 'cluster' ? 'selected' : '' ?>>By Cluster</option>
                             <option value="purchase_tier" <?= isset($segmentationType) && $segmentationType === 'purchase_tier' ? 'selected' : '' ?>>By Purchase Tier</option>
+                            <option value="clv_tier" <?= isset($segmentationType) && $segmentationType === 'clv_tier' ? 'selected' : '' ?>>By CLV Tier</option>
                             <option value="unassigned" <?= isset($segmentationType) && $segmentationType === 'unassigned' ? 'selected' : '' ?>>By Unassigned</option>
                         </select>
                         <button type="submit" class="btn btn-primary">Show Results</button>
@@ -566,232 +536,63 @@ if (empty($_SESSION['csrf_token'])) {
                 </div>
             </div>
 
+            <?php if (!empty($results)): ?>
             <script>
+                // 1. Initialize Data from PHP
                 const segmentationType = '<?= htmlspecialchars($segmentationType, ENT_QUOTES, 'UTF-8') ?>';
                 const results = <?= json_encode($results, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
-                
-                // HTML escaping function to prevent XSS in dynamic content
-                function escapeHtml(text) {
-                    const div = document.createElement('div');
-                    div.textContent = text;
-                    return div.innerHTML;
-                }
-                
-                // For unassigned, we don't have aggregated data, so handle differently
+
+                // 2. Data Parsing Logic
                 let labels, data, totalCustomers;
                 
                 if (segmentationType === 'unassigned') {
+                    // Unassigned doesn't have aggregated data, just raw lists
                     labels = [];
                     data = [];
                     totalCustomers = results.length;
                 } else {
-                    labels = <?= json_encode(array_column($results, array_keys($results[0])[0])) ?>;
-                    data = <?= json_encode(array_column($results, array_keys($results[0])[1])) ?>;
-                    totalCustomers = data.reduce((a, b) => a + b, 0);
+                    // Dynamically grab keys: [0] is usually label (e.g., gender), [1] is count
+                    if(results.length > 0) {
+                        const keys = Object.keys(results[0]);
+                        labels = results.map(row => row[keys[0]]);
+                        data = results.map(row => row[keys[1]]); 
+                        totalCustomers = data.reduce((a, b) => parseFloat(a) + parseFloat(b), 0);
+                    } else {
+                        labels = []; data = []; totalCustomers = 0;
+                    }
                 }
 
-                // Generate insights based on segmentation type
+                // 3. Generate Insights Text
                 let insights = '';
-                const totalCustomers = data.reduce((a, b) => a + b, 0);
-                if (totalCustomers === 0) {
+                if (totalCustomers === 0 && segmentationType !== 'unassigned') {
                     insights = '<p class="text-warning">No customer data available for analysis.</p>';
-                }else{
-                switch(segmentationType) {
-                    case 'gender':
-                        const incomes = results.map(r => parseFloat(r.avg_income));
-                        const incomeGap = results.length > 1 ? (Math.max(...incomes) - Math.min(...incomes)).toFixed(2) : 0;
-                        insights = `<ul>
-                            <li>Total customers analyzed: ${totalCustomers.toLocaleString()}</li>
-                            <li>Gender distribution shows ${labels.length} categories</li>
-                            <li>Largest segment: ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
-                            <li>Income gap between genders: $${parseFloat(incomeGap).toLocaleString()}</li>
-                            ${results.length > 0 && results[0].avg_income ? `<li>Average income across genders ranges from $${Math.min(...results.map(r => parseFloat(r.avg_income))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
-                        </ul>`;
-                        break;
-
-                    case 'region':
-                        insights = `<ul>
-                            <li>Total customers across ${labels.length} regions: ${totalCustomers.toLocaleString()}</li>
-                            <li>Top region: ${escapeHtml(labels[0])} with ${data[0].toLocaleString()} customers</li>
-                            <li>Regional concentration: Top 3 regions represent ${((data[0] + (data[1]||0) + (data[2]||0))/totalCustomers*100).toFixed(1)}% of total customers</li>
-                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Purchase amounts vary from $${Math.min(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()} to $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()} across regions</li>` : ''}
-                        </ul>`;
-                        break;
-
-                    case 'age_group':
-                        insights = `<ul>
-                            <li>Customer base distributed across ${labels.length} age groups</li>
-                            <li>Dominant age group: ${escapeHtml(labels[data.indexOf(Math.max(...data))])} with ${Math.max(...data).toLocaleString()} customers (${(Math.max(...data)/totalCustomers*100).toFixed(1)}%)</li>
-                            ${results.length > 0 && results[0].avg_income ? `<li>Income peaks in the ${escapeHtml(results.reduce((max, r) => parseFloat(r.avg_income) > parseFloat(max.avg_income) ? r : max).age_group || results[0].age_group)} age group at $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
-                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Highest spending age group: ${escapeHtml(results.reduce((max, r) => parseFloat(r.avg_purchase_amount) > parseFloat(max.avg_purchase_amount) ? r : max).age_group || results[0].age_group)}</li>` : ''}
-                        </ul>`;
-                        break;
-
-                    case 'income_bracket':
-                        insights = `<ul>
-                            <li>Customers segmented into ${labels.length} income brackets</li>
-                            <li>Largest income segment: ${escapeHtml(labels[data.indexOf(Math.max(...data))])} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
-                            ${results.length > 0 && results[0].avg_purchase_amount ? `<li>Purchase behavior: ${escapeHtml(results.reduce((max, r) => parseFloat(r.avg_purchase_amount) > parseFloat(max.avg_purchase_amount) ? r : max).income_bracket || results[0].income_bracket)} shows highest average spending at $${Math.max(...results.map(r => parseFloat(r.avg_purchase_amount))).toLocaleString()}</li>` : ''}
-                            <li>Income-purchase correlation can guide targeted marketing strategies</li>
-                        </ul>`;
-                        break;
-
-                    case 'cluster':
-                        // Check if we have enhanced metadata
-                        if (typeof clusterMetadata !== 'undefined' && clusterMetadata.length > 0) {
-                            const largestCluster = clusterMetadata.reduce((max, c) =>
-                                c.customer_count > max.customer_count ? c : max
-                            );
-                            insights = `<ul>
-                                <li>Advanced k-means clustering identified <strong>${clusterMetadata.length} distinct customer segments</strong></li>
-                                <li>Largest segment: <strong>${escapeHtml(largestCluster.cluster_name)}</strong> with ${parseInt(largestCluster.customer_count).toLocaleString()} customers (${((largestCluster.customer_count/totalCustomers)*100).toFixed(1)}%)</li>
-                                <li>Clusters range from "${escapeHtml(clusterMetadata[0].cluster_name)}" to "${escapeHtml(clusterMetadata[clusterMetadata.length-1].cluster_name)}"</li>
-                                <li>Each cluster has unique demographics, income levels, and purchasing behaviors - view detailed analysis below</li>
-                                <li><strong>Actionable insights:</strong> Scroll down to see cluster characteristics, statistics, visualizations, and marketing recommendations</li>
-                            </ul>`;
-                        } else {
-                            // Fallback to original insights if metadata not available
-                            insights = `<ul>
-                                <li>Machine learning clustering identified ${labels.length} distinct customer segments</li>
-                                <li>Largest cluster: ${escapeHtml(labels[data.indexOf(Math.max(...data))])} with ${Math.max(...data).toLocaleString()} customers</li>
-                                ${results.length > 0 && results[0].min_age && results[0].max_age ? `<li>Age ranges vary across clusters, providing demographic differentiation</li>` : ''}
-                                <li>Each cluster represents a unique customer profile for targeted campaigns</li>
-                                <li><em>Note: Run the Python clustering script to generate enhanced cluster analysis with detailed explanations</em></li>
-                            </ul>`;
-                        }
-                        break;
-
-                    case 'purchase_tier':
-                        insights = `<ul>
-                            <li>Customers categorized into ${labels.length} spending tiers</li>
-                            <li>Largest tier: ${escapeHtml(labels[data.indexOf(Math.max(...data))])} (${(Math.max(...data)/totalCustomers*100).toFixed(1)}% of customers)</li>
-                            ${results.length > 0 && results[0].avg_income ? `<li>High spenders correlate with income levels averaging $${Math.max(...results.map(r => parseFloat(r.avg_income))).toLocaleString()}</li>` : ''}
-                            <li>Understanding spending tiers enables personalized product recommendations</li>
-                        </ul>`;
-                        break;
-                    case 'clv_tier':
-                        insights = `<ul>
-                            <li><strong>Customer Value Hierarchy:</strong> Segmented by Lifetime Value (Avg Purchase × Freq × Lifespan).</li>
-                            <li><strong>Dominant Tier:</strong> ${labels[data.indexOf(Math.max(...data))]} with ${Math.max(...data).toLocaleString()} customers.</li>
-                            ${results.length > 0 && results[0].avg_clv ? `<li><strong>Value Gap:</strong> The average Platinum customer is worth $${Math.max(...results.map(r => parseFloat(r.avg_clv))).toLocaleString()}, significantly higher than Bronze users ($${Math.min(...results.map(r => parseFloat(r.avg_clv))).toLocaleString()}).</li>` : ''}
-                            <li><strong>Strategy:</strong> Focus on moving 'Silver' customers to 'Gold' by increasing their purchase frequency or retention (lifespan).</li>
-                        </ul>`;
-                        break;
+                } else {
+                    insights = `<ul><li>Total records analyzed: <strong>${totalCustomers.toLocaleString()}</strong></li></ul>`;
                 }
-
-                    case 'unassigned':
-                        const unassignedCount = results.length;
-                        if (unassignedCount > 0) {
-                            const ages = results.filter(r => r.age).map(r => parseInt(r.age));
-                            const incomes = results.filter(r => r.income).map(r => parseFloat(r.income));
-                            const purchases = results.filter(r => r.purchase_amount).map(r => parseFloat(r.purchase_amount));
-                            
-                            insights = `<ul>
-                                <li>Found <strong>${unassignedCount.toLocaleString()} customers</strong> not assigned to any cluster</li>
-                                <li>These customers represent potential segments that need analysis</li>
-                                ${ages.length > 0 ? `<li>Age range: ${Math.min(...ages)} to ${Math.max(...ages)} years</li>` : ''}
-                                ${incomes.length > 0 ? `<li>Income range: $${Math.min(...incomes).toLocaleString()} to $${Math.max(...incomes).toLocaleString()}</li>` : ''}
-                                ${purchases.length > 0 ? `<li>Purchase range: $${Math.min(...purchases).toLocaleString()} to $${Math.max(...purchases).toLocaleString()}</li>` : ''}
-                                <li><strong>Recommendation:</strong> Run the clustering script to include these customers in your segmentation analysis</li>
-                            </ul>`;
-                        } else {
-                            insights = `<ul>
-                                <li><strong>All customers have been assigned to clusters</strong></li>
-                                <li>Your segmentation coverage is complete</li>
-                                <li>Consider re-running clustering if you add new customers</li>
-                            </ul>`;
-                        }
-                        break;
-                }
-
-                document.getElementById('insights').innerHTML = insights;
-
-                // Main Bar/Line Chart
-                const ctx1 = document.getElementById('mainChart').getContext('2d');
-                const chartType = (segmentationType === 'age_group' || segmentationType === 'income_bracket') ? 'line' : 'bar';
                 
-                if (segmentationType === 'purchase_tier') {
-                    new Chart(ctx1, {
-                        type: 'bar',
-                        data: {
-                            labels: labels,
-                            datasets: [{
-                                label: 'Total Customers',
-                                data: data,
-                                backgroundColor: 'rgba(54, 162, 235, 0.6)',
-                                borderColor: 'rgba(54, 162, 235, 1)',
-                                borderWidth: 2
-                            }]
-                        },
-                        options: {
-                            indexAxis: 'y', 
-                            responsive: true,
-                            plugins: {
-                                title: {
-                                    display: true,
-                                    text: 'Customer Distribution by Purchase Tier'
-                                },
-                                legend: {
-                                    display: true
-                                }
-                            },
-                            scales: {
-                                x: {
-                                    beginAtZero: true,
-                                    title: {
-                                        display: true,
-                                        text: 'Number of Customers'
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }else if (segmentationType === 'region') {
-                    new Chart(ctx1, {
-                        type: 'bar',
-                        data: {
-                            labels: labels,
-                            datasets: [{
-                                label: 'Total Customers',
-                                data: data,
-                                backgroundColor: 'rgba(75, 192, 192, 0.6)',
-                                borderColor: 'rgba(75, 192, 192, 1)',
-                                borderWidth: 2
-                            }]
-                        },
-                        options: {
-                            indexAxis: 'y', 
-                            responsive: true,
-                            plugins: {
-                                title: {
-                                    display: true,
-                                    text: 'Customer Distribution by Region'
-                                },
-                                legend: {
-                                    display: true
-                                }
-                            },
-                            scales: {
-                                x: {
-                                    beginAtZero: true,
-                                    title: {
-                                        display: true,
-                                        text: 'Number of Customers'
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }else {
-                    if (segmentationType === 'unassigned') {
-                    // For unassigned, show demographic breakdown instead
-                    const genderCounts = {};
-                    const regionCounts = {};
-                    results.forEach(r => {
-                        genderCounts[r.gender] = (genderCounts[r.gender] || 0) + 1;
-                        regionCounts[r.region] = (regionCounts[r.region] || 0) + 1;
-                    });
+                // Update the insights div and hidden input for export
+                const insightContainer = document.getElementById('insights');
+                if(insightContainer) {
+                    insightContainer.innerHTML = insights;
+                    document.getElementById('analysis_insights_input').value = insightContainer.innerText;
+                }
 
+                // 4. Chart Generation
+                const ctx1 = document.getElementById('mainChart').getContext('2d');
+                const ctx2 = document.getElementById('pieChart').getContext('2d');
+                
+                const colors = [
+                    'rgba(255, 99, 132, 0.8)', 'rgba(54, 162, 235, 0.8)',
+                    'rgba(255, 206, 86, 0.8)', 'rgba(75, 192, 192, 0.8)',
+                    'rgba(153, 102, 255, 0.8)', 'rgba(255, 159, 64, 0.8)'
+                ];
+
+                // --- Main Chart ---
+                if (segmentationType === 'unassigned') {
+                    // Special handling for Unassigned: Bar chart of Genders
+                    const genderCounts = {};
+                    results.forEach(r => { genderCounts[r.gender] = (genderCounts[r.gender] || 0) + 1; });
+                    
                     new Chart(ctx1, {
                         type: 'bar',
                         data: {
@@ -801,140 +602,96 @@ if (empty($_SESSION['csrf_token'])) {
                                 data: Object.values(genderCounts),
                                 backgroundColor: 'rgba(54, 162, 235, 0.6)',
                                 borderColor: 'rgba(54, 162, 235, 1)',
-                                borderWidth: 2
+                                borderWidth: 1
                             }]
                         },
-                        options: {
-                            responsive: true,
-                            plugins: {
-                                title: {
-                                    display: true,
-                                    text: 'Unassigned Customers - Gender Distribution'
-                                },
-                                legend: {
-                                    display: true
-                                }
-                            },
-                            scales: {
-                                y: {
-                                    beginAtZero: true
-                                }
-                            }
-                        }
+                        options: { responsive: true, plugins: { title: { display: true, text: 'Unassigned: Gender Distribution' } } }
                     });
                 } else {
+                    // Standard Logic for other types
+                    const isLine = (segmentationType === 'age_group' || segmentationType === 'income_bracket');
+                    const isHorizontal = (segmentationType === 'purchase_tier' || segmentationType === 'region');
+                    
                     new Chart(ctx1, {
-                        type: chartType,
+                        type: isLine ? 'line' : 'bar',
                         data: {
                             labels: labels,
                             datasets: [{
-                                label: '<?= ucfirst(str_replace('_', ' ', array_keys($results[0])[1])) ?>',
+                                label: 'Total Customers',
                                 data: data,
-                                backgroundColor: chartType === 'bar' ? 'rgba(54, 162, 235, 0.6)' : 'rgba(54, 162, 235, 0.2)',
+                                backgroundColor: 'rgba(54, 162, 235, 0.6)',
                                 borderColor: 'rgba(54, 162, 235, 1)',
-                                borderWidth: 2,
-                                fill: chartType === 'line'
+                                borderWidth: 1,
+                                fill: isLine
                             }]
                         },
                         options: {
+                            indexAxis: isHorizontal ? 'y' : 'x',
                             responsive: true,
                             plugins: {
-                                title: {
-                                    display: true,
-                                    text: 'Customer Distribution by <?= ucfirst(str_replace('_', ' ', $segmentationType)) ?>'
-                                },
-                                legend: {
-                                    display: true
-                                }
-                            },
-                            scales: {
-                                y: {
-                                    beginAtZero: true
-                                }
+                                title: { display: true, text: `Distribution by ${segmentationType.replace('_', ' ').toUpperCase()}` },
+                                legend: { display: false }
                             }
                         }
                     });
                 }
-                }
-            const ctx2 = document.getElementById('pieChart').getContext('2d');
-            const colors = [
-                'rgba(255, 99, 132, 0.8)',
-                'rgba(54, 162, 235, 0.8)',
-                'rgba(255, 206, 86, 0.8)',
-                'rgba(75, 192, 192, 0.8)',
-                'rgba(153, 102, 255, 0.8)',
-                'rgba(255, 159, 64, 0.8)'
-            ];
 
+                // --- Pie Chart ---
+                let pieLabels, pieData;
                 if (segmentationType === 'unassigned') {
-                    // For unassigned, show region breakdown
                     const regionCounts = {};
-                    results.forEach(r => {
-                        regionCounts[r.region] = (regionCounts[r.region] || 0) + 1;
-                    });
-
-                    new Chart(ctx2, {
-                        type: 'pie',
-                        data: {
-                            labels: Object.keys(regionCounts),
-                            datasets: [{
-                                data: Object.values(regionCounts),
-                                backgroundColor: colors.slice(0, Object.keys(regionCounts).length),
-                                borderWidth: 2,
-                                borderColor: '#fff'
-                            }]
-                        },
-                        options: {
-                            responsive: true,
-                            plugins: {
-                                title: {
-                                    display: true,
-                                    text: 'Region Distribution %'
-                                },
-                                legend: {
-                                    position: 'bottom',
-                                    labels: {
-                                        boxWidth: 15,
-                                        font: {
-                                            size: 10
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    });
+                    results.forEach(r => { regionCounts[r.region] = (regionCounts[r.region] || 0) + 1; });
+                    pieLabels = Object.keys(regionCounts);
+                    pieData = Object.values(regionCounts);
                 } else {
+                    pieLabels = labels;
+                    pieData = data;
+                }
+
                 new Chart(ctx2, {
                     type: 'doughnut',
                     data: {
-                        labels: labels,
+                        labels: pieLabels,
                         datasets: [{
-                            data: data,
-                            backgroundColor: colors.slice(0, labels.length),
-                            borderWidth: 2,
-                            borderColor: '#fff'
+                            data: pieData,
+                            backgroundColor: colors.slice(0, pieLabels.length),
+                            borderWidth: 1
                         }]
                     },
                     options: {
                         responsive: true,
                         plugins: {
-                            title: {
-                                display: true,
-                                text: 'Distribution %'
-                            },
-                            legend: {
-                                position: 'bottom',
-                                labels: {
-                                    boxWidth: 15,
-                                    font: {
-                                        size: 10
-                                    }
-                                }
-                            }
+                            title: { display: true, text: 'Distribution %' },
+                            legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } }
                         }
                     }
-                    });
+                });
+
+                // 5. REQUIRED: Export Helper Function
+                // This makes the "Download" button work by capturing the charts
+                function prepareExport() {
+                    const mainChart = Chart.getChart("mainChart");
+                    const pieChart = Chart.getChart("pieChart");
+                    
+                    if (mainChart) {
+                        document.getElementById('chart_image_main').value = mainChart.toBase64Image();
+                    }
+                    if (pieChart) {
+                        document.getElementById('chart_image_pie').value = pieChart.toBase64Image();
+                    }
+                    
+                    const insightsDiv = document.getElementById('insights');
+                    if(insightsDiv) {
+                        document.getElementById('analysis_insights_input').value = insightsDiv.innerText;
+                    }
                 }
+            </script>
+            <?php else: ?>
+                <div class="alert alert-warning text-center mt-4">
+                    No data available for this segmentation.
+                </div>
+            <?php endif; ?>
+                                
             </script>
 
             <!-- Enhanced Cluster Visualizations -->
